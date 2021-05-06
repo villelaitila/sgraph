@@ -1,0 +1,16 @@
+<model version="2.1">
+  <elements t="architecture">
+  <e n="nginx" >
+    <e n="src" >
+      <e n="core" >
+        <e n="nginx.c" >
+  <r r="2" t="inc" />
+        </e>
+        <e i="2" n="nginx.h" >
+        </e>
+      </e>
+    </e>
+  </e>
+
+</elements>
+</model>
