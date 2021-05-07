@@ -68,6 +68,66 @@ Although this might seem very compelling data format to use, it is not recommend
 large models, e.g. 10 million elements.
 
 
+### Using the API
+
+Creating a simple model:
+
+```
+>>> from sgraph import SGraph
+>>> from sgraph import SElement
+>>> from sgraph import SElementAssociation
+>>> x = SGraph(SElement(None, ''))
+>>> x
+<sgraph.sgraph.SGraph object at 0x7f2efae9ad30>
+
+>>> x.to_deps(fname=None)
+
+>>> e1 = x.createOrGetElementFromPath('/path/to/file.x')
+>>> e2 = x.createOrGetElementFromPath('/path/to/file.y')
+>>> x.to_deps(fname=None)
+/path
+/path/to
+/path/to/file.x
+/path/to/file.y
+
+>>> x.to_xml(fname=None)
+<model version="2.1">
+  <elements>
+  <e n="path" >
+    <e n="to" >
+      <e n="file.x" >
+      </e>
+      <e n="file.y" >
+      </e>
+    </e>
+  </e>
+</elements>
+</model>
+
+>>> ea = SElementAssociation(e1, e2, 'use')
+>>> ea.initElems()  # ea is not connected to the model before this call.
+>>> x.to_deps(fname=None)
+/path/to/file.x:/path/to/file.y:use
+/path
+/path/to
+>>>
+
+>>> x.to_xml(fname=None)
+<model version="2.1">
+  <elements>
+  <e n="path" >
+    <e n="to" >
+      <e n="file.x" >
+        <r r="2" t="use" />
+      </e>
+      <e i="2" n="file.y" >
+      </e>
+    </e>
+  </e>
+ </elements>
+</model>
+
+```
 
 
 ## Current utilization
