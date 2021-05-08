@@ -1,6 +1,6 @@
 import sys
 
-from sgraph.sgraph import SGraph
+from sgraph import SGraph
 
 inputfilepath = sys.argv[1]
 outfilepath = None

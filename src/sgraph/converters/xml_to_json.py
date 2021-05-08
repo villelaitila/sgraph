@@ -3,7 +3,7 @@ import json
 import random
 import string
 
-from lxml import etree as ET
+from lxml import etree
 
 
 def get_node_path(elem_node):
@@ -52,7 +52,7 @@ class XmlToNodesAndEdges:
 
     # TODO build as dict for better performance (easy: set id as key)
     def __parse(self, ):
-        tree = ET.parse(self.path_to_xml)
+        tree = etree.parse(self.path_to_xml)
 
         # Get all element nodes (not the meta)
         nodes = [self.__build_node_initial(e) for e in tree.findall('*//e')]

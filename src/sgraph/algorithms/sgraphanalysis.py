@@ -1,6 +1,6 @@
 # Perform analysis on the graph itself
-from sgraph.selementassociation import SElementAssociation
-from sgraph.sgraph import SGraph
+from sgraph import SElementAssociation
+from sgraph import SGraph
 
 
 class SGraphAnalysis:

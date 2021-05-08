@@ -18,8 +18,8 @@ import codecs
 import zipfile
 from typing import Optional
 
-from selement import SElement
-from selementassociation import SElementAssociation
+from .selement import SElement
+from .selementassociation import SElementAssociation
 
 
 def addEA(deptype, info, id1, id2, egm):

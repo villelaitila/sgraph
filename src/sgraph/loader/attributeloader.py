@@ -2,7 +2,7 @@ import math
 import os
 
 from sgraph.attributes import attributequeries
-from sgraph.sgraph import SGraph
+from sgraph import SGraph
 
 
 class AttributeLoader:

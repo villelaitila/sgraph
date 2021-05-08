@@ -1,5 +1,5 @@
-from sgraph.modelapi import ModelApi
-from sgraph.sgraph import SGraph
+from sgraph import ModelApi
+from sgraph import SGraph
 
 
 def node(elem_id, name, parent=''):

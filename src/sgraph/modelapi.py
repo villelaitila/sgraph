@@ -1,8 +1,8 @@
 import functools
 
-from sgraph.selement import SElement
-from sgraph.selementassociation import SElementAssociation
-from sgraph.sgraph import SGraph
+from sgraph import SElement
+from sgraph import SElementAssociation
+from sgraph import SGraph
 
 
 class ModelApi:

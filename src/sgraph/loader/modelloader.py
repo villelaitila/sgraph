@@ -2,7 +2,7 @@ import os
 import sys
 
 from sgraph.loader.attribute_loader import AttributeLoader
-from sgraph.sgraph import SGraph
+from sgraph import SGraph
 
 
 class ModelLoader:

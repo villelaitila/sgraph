@@ -3,8 +3,8 @@ import sys
 from Levenshtein import StringMatcher
 
 from sgraph.compare.comparegraphattrs import CompareGraphAttrs
-from sgraph.selementassociation import SElementAssociation
-from sgraph.sgraph import SGraph, SElement
+from sgraph import SElementAssociation
+from sgraph import SGraph, SElement
 
 ignoredAttrs = {'days_since_modified'}
 

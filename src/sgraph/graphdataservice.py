@@ -3,8 +3,8 @@ import os
 import zipfile
 
 from sgraph.converters.sgraph_to_cytoscape import graph_to_cyto
-from sgraph.modelapi import ModelApi
-from sgraph.sgraph import SGraph
+from sgraph import ModelApi
+from sgraph import SGraph
 
 
 def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, recursion, flavour):

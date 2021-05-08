@@ -2,7 +2,7 @@
 Filter graph by removing some content of it using some of remove_* functions.
 """
 
-from sgraph.sgraph import SGraph
+from sgraph import SGraph
 
 
 class SGraphFiltering:

@@ -1,8 +1,8 @@
 import sys
 from typing import Optional, Dict
 
-from sgraph.compare.selementmerged import SElementMerged
-from sgraph.selementassociation import SElementAssociation
+from sgraph.compare.selementmerged import SElementMergedException
+from sgraph import SElementAssociation
 
 DEBUG = False
 
@@ -39,7 +39,7 @@ class SElement:
                                         self.name, self.parent.getPath(), '<not known>',
                                         self.parent.childrenDict[self.name].getType()))
                 else:
-                    raise SElementMerged('Element {} tried to be merged with an existing element '
+                    raise SElementMergedException('Element {} tried to be merged with an existing element '
                                          'under same parent={}'.format(name, parent.getPath()))
         else:
             self.parent = None
