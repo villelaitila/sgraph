@@ -6,8 +6,10 @@ def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
         stats = model.calculate_model_stats()
 
     def str_delta(num):
-        if num < 0: return str(num)
-        elif num > 0: return '+' + str(num)
+        if num < 0:
+            return str(num)
+        elif num > 0:
+            return '+' + str(num)
         return '0'
 
     (dependenciesCount, nodesCount, depTypeCounts, depToElemRatio) = stats
@@ -20,7 +22,7 @@ def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
     if delta:
         x += ' (' + str_delta(delta[1]) + ')'
     if nodesCount != 0:
-        x += '\n Dependencies to element ratio: ' + str(depToElemRatio) +' %'
+        x += '\n Dependencies to element ratio: ' + str(depToElemRatio) + ' %'
     else:
         x += '\n Dependencies to element ratio: N/A'
     if delta:
@@ -29,7 +31,7 @@ def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
     x += '\n Dependencies breakdown: '
     keys = sorted(depTypeCounts.keys())
     for k in keys:
-        x += str(depTypeCounts[k]) + 'x '+k+', '
+        x += str(depTypeCounts[k]) + 'x ' + k + ', '
     if x.endswith(', '):
         x = x[:-2]
 
@@ -47,7 +49,7 @@ def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
         disappeared = ''
         appeared = ''
         for k in keys:
-            if not k in depTypeCounts:
+            if k not in depTypeCounts:
                 if delta[2][k] < 0:
                     disappeared += str_delta(delta[2][k]) + ' ' + k + ', '
                 elif delta[2][k] > 0:

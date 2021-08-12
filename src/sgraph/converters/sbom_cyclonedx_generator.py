@@ -183,7 +183,7 @@ def elem_as_bom_data(elem, other_externals_by_name):
 
                             data['externalReferences'] = [{
                                 'type':
-                                'distribution',  # todo https://github.com/CycloneDX/cyclonedx-dotnet-library/blob/a2118389b3dee0623771015e68f4574562146e4a/CycloneDX.Core/Models/v1_2/ExternalReference.cs
+                                'distribution',  # todo https://github.com/CycloneDX/cyclonedx-dotnet-library/blob/a2118389b3dee0623771015e68f4574562146e4a/CycloneDX.Core/Models/v1_2/ExternalReference.cs  # noqa
                                 'url': url
                             }]
                             break
@@ -285,7 +285,8 @@ def combine_elems(elem, other_externals_by_name):
                     if better_place.parent.name == 'PIP' and \
                             contains_incoming_ea_from_elems(under_ext, ['Dockerfile', '.py']):
                         print('MERGING:'
-                              '  ' + better_place.getPath() + ' another elem ' + under_ext.getPath())
+                              '  ' + better_place.getPath() +
+                              ' another elem ' + under_ext.getPath())
                         better_place.merge(under_ext)
                         all_n.remove(under_ext)
                     else:
@@ -300,7 +301,8 @@ def analyze_3rdparty(external_elem, sbom):
     other_externals_by_name = {}
     while stack:
         elem = stack.pop(0)
-        other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
+        other_externals_by_name.setdefault(clean_name(elem.name),
+                                           []).append(elem)
         stack += elem.children
 
     stack = list(external_elem.children)
@@ -309,14 +311,13 @@ def analyze_3rdparty(external_elem, sbom):
         combine_elems(elem, other_externals_by_name)
         stack += elem.children
 
-
     stack = list(external_elem.children)
     other_externals_by_name = {}
     while stack:
         elem = stack.pop(0)
-        other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
+        other_externals_by_name.setdefault(clean_name(elem.name),
+                                           []).append(elem)
         stack += elem.children
-
 
     stack = list(external_elem.children)
     while stack:
