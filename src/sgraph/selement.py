@@ -1,8 +1,8 @@
 import sys
 from typing import Optional, Dict
 
-from sgraph.compare.selementmerged import SElementMergedException
-from sgraph import SElementAssociation
+from sgraph.selementmergedexception import SElementMergedException
+from sgraph.selementassociation import SElementAssociation
 
 DEBUG = False
 
@@ -18,9 +18,6 @@ class SElement:
         if '/' in name:
             name = name.replace('/', '__slash__')
 
-        if '..' == name:
-            print('bp')
-
         if self == parent:
             raise Exception('Self loop in model\n')
 
@@ -34,13 +31,15 @@ class SElement:
                 self.parent.childrenDict[self.name] = self
             else:
                 if DEBUG:
-                    raise Exception('Error: overlapping elements related to {} under {}, types: '
-                                    '{} and {}'.format(
-                                        self.name, self.parent.getPath(), '<not known>',
-                                        self.parent.childrenDict[self.name].getType()))
+                    raise Exception(
+                        'Error: overlapping elements related to {} under {}, types: '
+                        '{} and {}'.format(
+                            self.name, self.parent.getPath(), '<not known>',
+                            self.parent.childrenDict[self.name].getType()))
                 else:
-                    raise SElementMergedException('Element {} tried to be merged with an existing element '
-                                         'under same parent={}'.format(name, parent.getPath()))
+                    raise SElementMergedException(
+                        'Element {} tried to be merged with an existing element '
+                        'under same parent={}'.format(name, parent.getPath()))
         else:
             self.parent = None
 
@@ -54,7 +53,7 @@ class SElement:
     def addChild(self, child: 'SElement'):
         """
         Add child, but if there is an overlapping element, merge instead and return merged element.
-        :param child: the child to be added
+        :param child: the child to be added.
         :return: None or the element where the child has been merged with (differs from child)
         """
         if child == self:
@@ -65,9 +64,11 @@ class SElement:
             self.childrenDict[child.name] = child
         else:
             if DEBUG:
-                raise Exception('Error: overlapping elements related to {} under {}, types: {} '
-                                'and {}'.format(child.name, self.getPath(), child.getType(),
-                                                self.childrenDict[child.name].getType()))
+                raise Exception(
+                    'Error: overlapping elements related to {} under {}, types: {} '
+                    'and {}'.format(child.name, self.getPath(),
+                                    child.getType(),
+                                    self.childrenDict[child.name].getType()))
             else:
                 self.childrenDict[child.name].merge(child)
                 return self.childrenDict[child.name]
@@ -168,8 +169,9 @@ class SElement:
         if elem.name in self.childrenDict:
             self.childrenDict.pop(elem.name)
         else:
-            sys.stderr.write('Error: Probably duplicated element {} under {}'.format(
-                elem.name, self.getPath()))
+            sys.stderr.write(
+                'Error: Probably duplicated element {} under {}'.format(
+                    elem.name, self.getPath()))
 
     def remove(self, leaveParentUntouched=False):
         if not leaveParentUntouched:
@@ -248,13 +250,18 @@ class SElement:
                 #        out.append(c)
         elif current_level < level:
             for c in self.children:
-                out += c.getElementsByNameOnLevel(name, level, current_level + 1)
+                out += c.getElementsByNameOnLevel(name, level,
+                                                  current_level + 1)
         return out
 
-    def recurseIncomingDependencies(self, elemlist, assoclist, outside_level=0):
+    def recurseIncomingDependencies(self,
+                                    elemlist,
+                                    assoclist,
+                                    outside_level=0):
         for c in self.incoming:
             if outside_level == 0 or c.fromElement.getAncestorOfLevel(
-                    outside_level) != c.toElement.getAncestorOfLevel(outside_level):
+                    outside_level) != c.toElement.getAncestorOfLevel(
+                        outside_level):
                 elemlist.append(c.fromElement)
                 if assoclist is not None:
                     assoclist.append(c)
@@ -456,15 +463,15 @@ class SElement:
                     print('Problem with element parent self ref..')
                     print(self.getPath())
                     print(c.parent.getPath())
-                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
-                                    c.parent.name + '\n')
+                    raise Exception('Error: broken model related to elem ' +
+                                    c.name + ' under ' + c.parent.name + '\n')
 
                 if c in elems:
                     print('Problem with element path')
                     print(c.parent.parent.getPath())
                     print(len(self.children))
-                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
-                                    c.parent.name + '\n')
+                    raise Exception('Error: broken model related to elem ' +
+                                    c.name + ' under ' + c.parent.name + '\n')
                 else:
                     elems.add(c)
                     c.verify(elems, i)
@@ -489,11 +496,13 @@ class SElement:
         # TODO This could be faster if assocs would be recycled instead of throw away + create new
 
         for ea in list(other.outgoing):
-            if ea.toElement in current_deps and ea.deptype in current_deps[ea.toElement]:
+            if ea.toElement in current_deps and ea.deptype in current_deps[
+                    ea.toElement]:
                 # already exists
                 pass
             elif self != ea.toElement:
-                newEa = SElementAssociation(self, ea.toElement, ea.deptype, ea.attrs)
+                newEa = SElementAssociation(self, ea.toElement, ea.deptype,
+                                            ea.attrs)
                 newEa.initElems()
 
         for ea in list(other.outgoing):
@@ -504,11 +513,13 @@ class SElement:
             current_deps.setdefault(ea.fromElement, []).append(ea.deptype)
 
         for ea in list(other.incoming):
-            if ea.fromElement in current_deps and ea.deptype in current_deps[ea.fromElement]:
+            if ea.fromElement in current_deps and ea.deptype in current_deps[
+                    ea.fromElement]:
                 # already exists
                 pass
             elif ea.fromElement != self:
-                newEa = SElementAssociation(ea.fromElement, self, ea.deptype, ea.attrs)
+                newEa = SElementAssociation(ea.fromElement, self, ea.deptype,
+                                            ea.attrs)
                 newEa.initElems()
 
         for ea in list(other.incoming):
@@ -526,7 +537,8 @@ class SElement:
                                     self.attrs[k].append(item)
                         else:
                             # TODO Later inspect these when doing func/class relocation
-                            self.attrs[k] = str(self.attrs[k]) + ' -merged- ' + str(v)
+                            self.attrs[k] = str(
+                                self.attrs[k]) + ' -merged- ' + str(v)
                     else:
                         pass
 
