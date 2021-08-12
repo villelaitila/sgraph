@@ -484,19 +484,19 @@ class SGraph:
         return delta
 
     @staticmethod
-    def parse_xml_or_zipped_xml(modelfile, type_rules=None, ignored_attributes=None,
+    def parse_xml_or_zipped_xml(model_file_path, type_rules=None, ignored_attributes=None,
                                 only_root=False):
-        if '.xml.zip' in modelfile:
-            with open(modelfile, 'rb') as filehandle:
+        if isinstance(model_file_path, str) and '.xml.zip' in model_file_path:
+            with open(model_file_path, 'rb') as filehandle:
                 zfile = zipfile.ZipFile(filehandle)
                 data = zfile.open('modelfile.xml', 'r')
                 data = io.TextIOWrapper(data)
                 zfile.close()
                 m = SGraph.parse_xml(data, type_rules, ignored_attributes, only_root)
-                m.set_model_path(modelfile)
+                m.set_model_path(model_file_path)
         else:
-            m = SGraph.parse_xml(modelfile, type_rules, ignored_attributes, only_root)
-            m.set_model_path(modelfile)
+            m = SGraph.parse_xml(model_file_path, type_rules, ignored_attributes, only_root)
+            m.set_model_path(model_file_path)
         return m
 
     @staticmethod
