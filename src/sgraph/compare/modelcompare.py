@@ -971,6 +971,7 @@ class ModelCompare:
 
     def getElementsWithAttrDiff(self, compareModel: SGraph, attribute):
         matched_elems = []
+
         def traverseElems(elem):
             if CompareGraphAttrs.CHANGED_ATTRIBUTES in elem.attrs:
                 if attribute in elem.attrs[CompareGraphAttrs.CHANGED_ATTRIBUTES].split(';'):
@@ -978,5 +979,6 @@ class ModelCompare:
 
             for c in elem.children:
                 traverseElems(c)
+
         compareModel.traverse(traverseElems)
         return matched_elems

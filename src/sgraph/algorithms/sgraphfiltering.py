@@ -6,7 +6,6 @@ from sgraph import SGraph
 
 
 class SGraphFiltering:
-
     @staticmethod
     def remove_dependencies_by_deptypes(model: SGraph, dep_types_to_remove):
         """

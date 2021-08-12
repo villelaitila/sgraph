@@ -4,7 +4,6 @@ from sgraph import SGraph
 
 
 class SGraphAnalysis:
-
     @staticmethod
     def generate_dynamic_dependencies(model: SGraph):
         """
@@ -61,9 +60,9 @@ class SGraphAnalysis:
                                 if func_call.fromElement != func_call.toElement:
                                     # Do not create new self dependencies
                                     if func_call.fromElement != f2:
-                                        dynamic_call = SElementAssociation(func_call.fromElement, f2,
-                                                                           'dynamic_' + func_call.deptype,
-                                                                           func_call.attrs)
+                                        dynamic_call = SElementAssociation(
+                                            func_call.fromElement, f2,
+                                            'dynamic_' + func_call.deptype, func_call.attrs)
                                         hash_num = dynamic_call.getHashNum()
                                         new_deps[hash_num] = dynamic_call
 

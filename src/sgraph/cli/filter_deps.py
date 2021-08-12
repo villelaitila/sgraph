@@ -1,7 +1,6 @@
 import click
 import re
 import sys
-
 """
 Use like this:
 
@@ -42,15 +41,15 @@ def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
                 from_m = pfrom.search(frompart)
                 if from_m is None:
                     if debug:
-                        sys.stderr.write('Skip line, Could not match from=' + pattern_from + ' to '
-                                         + frompart + '\n')
+                        sys.stderr.write('Skip line, Could not match from=' + pattern_from +
+                                         ' to ' + frompart + '\n')
                     continue
             if pto:
                 to_m = pto.search(topart)
                 if to_m is None:
                     if debug:
-                        sys.stderr.write('Skip line, Could not match to=' + pattern_from + ' to '
-                                         + frompart + '\n')
+                        sys.stderr.write('Skip line, Could not match to=' + pattern_from + ' to ' +
+                                         frompart + '\n')
                     continue
 
             if equation != '':
