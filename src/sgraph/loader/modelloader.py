@@ -1,7 +1,7 @@
 import os
 import sys
 
-from sgraph.loader import AttributeLoader
+from sgraph.loader.attributeloader import AttributeLoader
 from sgraph import SGraph
 
 
