@@ -148,22 +148,35 @@ class ModelApi:
             if not ModelApi.intra_file(ea):
                 found.append(ea)
 
-    def filter_model(self, elem):
-        subg = SGraph()
-        # noinspection PyUnusedLocal
-        selem = subg.createOrGetElement(elem)
-        s = [elem]
-        while s:
-            e = s.pop(0)
-            for ea in e.outgoing:
-                selem_from = subg.createOrGetElement(ea.fromElement)
-                selem_to = subg.createOrGetElement(ea.toElement)
+    def filter_model(self, source_elem, source_graph):
+        sub_graph = SGraph()
+        sub_graph.createOrGetElement(source_elem)
+        stack = [source_elem]
+        # Traverse related elements from the source_graph using stack
+        while stack:
+            elem = stack.pop(0)
+            for ea in elem.outgoing:
+                selem_from = sub_graph.createOrGetElement(ea.fromElement)
+                selem_to = sub_graph.createOrGetElement(ea.toElement)
                 sea = SElementAssociation(selem_from, selem_to, ea.deptype, ea.attrs)
                 sea.initElems()
-            for ea in e.incoming:
-                selem_from = subg.createOrGetElement(ea.fromElement)
-                selem_to = subg.createOrGetElement(ea.toElement)
+            for ea in elem.incoming:
+                selem_from = sub_graph.createOrGetElement(ea.fromElement)
+                selem_to = sub_graph.createOrGetElement(ea.toElement)
                 sea = SElementAssociation(selem_from, selem_to, ea.deptype, ea.attrs)
                 sea.initElems()
-            s.extend(e.children)
-        return subg
+            stack.extend(elem.children)
+
+        # Now that elements have been created, copy attribute data from the whole graph, via
+        # traversal using two stacks.
+        stack = [sub_graph.rootNode]
+        whole_graph_stack = [source_graph.rootNode]
+        while stack:
+            elem = stack.pop(0)
+            corresponding_source_elem = whole_graph_stack.pop(0)
+            elem.attrs = corresponding_source_elem.attrs.copy()
+            for elem in elem.children:
+                stack.append(elem)
+                whole_graph_stack.append(corresponding_source_elem.getChildByName(elem.name))
+
+        return sub_graph
