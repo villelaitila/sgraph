@@ -1,4 +1,3 @@
-
 def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
     if stats is not None:
         pass  # using given

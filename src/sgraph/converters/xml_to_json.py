@@ -16,7 +16,6 @@ def get_node_path(elem_node):
 
 class XmlToNodesAndEdges:
     """XmlToNodesAndEdges transforms dependency xml to nodes and edges"""
-
     def __init__(self, path_to_xml):
         self.path_to_xml = path_to_xml
         self.nodes = []
@@ -41,9 +40,13 @@ class XmlToNodesAndEdges:
 
         elem_node.attrib['_id'] = element_path
 
-        node = {'id': element_path, 'i': elem_node.get('i'), 'name': elem_node.get('n'), 'path':
-            get_node_path(elem_node),
-                '__elem': elem_node}
+        node = {
+            'id': element_path,
+            'i': elem_node.get('i'),
+            'name': elem_node.get('n'),
+            'path': get_node_path(elem_node),
+            '__elem': elem_node
+        }
 
         if elem_node.get('loc'):
             node['loc'] = elem_node.get('loc')
@@ -68,18 +71,27 @@ class XmlToNodesAndEdges:
                 # Relations in r tag
                 for ri in elem_r.get('r').split(','):
                     edge_id += 1
-                    edges.append({'id': str(edge_id), 'source': node['id'], 'target': ri, 'type': elem_r.get('t')})
+                    edges.append({
+                        'id': str(edge_id),
+                        'source': node['id'],
+                        'target': ri,
+                        'type': elem_r.get('t')
+                    })
 
         # Ids set -> get children
         for node in nodes:
-            node['children_ids'] = [c.attrib['_id'] for c in node['__elem'].getchildren() if
-                                    c.tag == 'e']
+            node['children_ids'] = [
+                c.attrib['_id'] for c in node['__elem'].getchildren() if c.tag == 'e'
+            ]
 
         # Delete actual XML Elem
         for node in nodes:
             del node['__elem']
 
-        return (nodes, edges,)
+        return (
+            nodes,
+            edges,
+        )
 
     def get_doc(self):
         """Returns dict with nodes and edges"""

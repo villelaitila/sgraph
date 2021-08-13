@@ -45,8 +45,7 @@ def bom_ref(elem, v):
         pkgtype = 'npm'
     elif elem.attrs.get('repotype', '') == 'APT':
         pkgtype = 'deb'
-    elif elem.parent.name == 'Python' or elem.attrs.get('repotype',
-                                                        '') == 'PIP':
+    elif elem.parent.name == 'Python' or elem.attrs.get('repotype', '') == 'PIP':
         pkgtype = 'pypi'  # ??
     elif elem.parent.name == 'Go':
         pkgtype = 'golang'
@@ -92,12 +91,7 @@ def bom_licenses(elem):
     }
     if 'license' in elem.attrs:
         license_spdx_id = resolve_license_spdx_id(elem.attrs['license'], elem)
-        return [{
-            'license': {
-                'id': license_spdx_id,
-                'url': license_url[license_spdx_id]
-            }
-        }]
+        return [{'license': {'id': license_spdx_id, 'url': license_url[license_spdx_id]}}]
     return []
 
 
@@ -155,8 +149,7 @@ def elem_as_bom_data(elem, other_externals_by_name):
     licenses = bom_licenses(elem)
     # type scope
     if 'version' in elem.attrs and ';' in elem.attrs['version']:
-        usages = list(map(lambda x: x.fromElement.getPath(),
-                          elem.incoming))[0:3]
+        usages = list(map(lambda x: x.fromElement.getPath(), elem.incoming))[0:3]
 
         for v in elem.attrs['version'].split(';'):
             ref = bom_ref(elem, v)
@@ -183,14 +176,13 @@ def elem_as_bom_data(elem, other_externals_by_name):
 
                             data['externalReferences'] = [{
                                 'type':
-                                'distribution',  # todo https://github.com/CycloneDX/cyclonedx-dotnet-library/blob/a2118389b3dee0623771015e68f4574562146e4a/CycloneDX.Core/Models/v1_2/ExternalReference.cs  # noqa
+                                    'distribution',  # todo https://github.com/CycloneDX/cyclonedx-dotnet-library/blob/a2118389b3dee0623771015e68f4574562146e4a/CycloneDX.Core/Models/v1_2/ExternalReference.cs  # noqa
                                 'url': url
                             }]
                             break
                 else:
                     data['externalReferences'] = [{
-                        'type':
-                        'distribution',
+                        'type': 'distribution',
                         'url': [elem.attrs['resolved']]
                     }]
             yield data
@@ -202,22 +194,14 @@ def elem_as_bom_data(elem, other_externals_by_name):
             v = ''
         ref = bom_ref(elem, v)
         return {
-            'name':
-            clean_name(elem.name),
-            'version':
-            v,
-            'bom-ref':
-            ref,
-            'purl':
-            ref,
-            'licenses':
-            licenses,
-            'scope':
-            '?',
-            'example-usages':
-            list(map(lambda x: x.fromElement.getPath(), elem.incoming))[0:3],
-            'description':
-            ''
+            'name': clean_name(elem.name),
+            'version': v,
+            'bom-ref': ref,
+            'purl': ref,
+            'licenses': licenses,
+            'scope': '?',
+            'example-usages': list(map(lambda x: x.fromElement.getPath(), elem.incoming))[0:3],
+            'description': ''
         }
     else:
         if elem.incoming:
@@ -254,8 +238,7 @@ def combine_elems(elem, other_externals_by_name):
                 print('  - ' + e.getPath())
                 dep_summary_1 = defaultdict(int)
                 for ea in e.incoming:
-                    dep_summary_1[(file_extension(ea.fromElement),
-                                   ea.deptype)] += 1
+                    dep_summary_1[(file_extension(ea.fromElement), ea.deptype)] += 1
                 print('     * ' + str(dict(dep_summary_1)))
                 for d in dep_summary_1:
                     e.attrs.setdefault('user_exts', set()).add(d[0])
@@ -285,8 +268,8 @@ def combine_elems(elem, other_externals_by_name):
                     if better_place.parent.name == 'PIP' and \
                             contains_incoming_ea_from_elems(under_ext, ['Dockerfile', '.py']):
                         print('MERGING:'
-                              '  ' + better_place.getPath() +
-                              ' another elem ' + under_ext.getPath())
+                              '  ' + better_place.getPath() + ' another elem ' +
+                              under_ext.getPath())
                         better_place.merge(under_ext)
                         all_n.remove(under_ext)
                     else:
@@ -301,8 +284,7 @@ def analyze_3rdparty(external_elem, sbom):
     other_externals_by_name = {}
     while stack:
         elem = stack.pop(0)
-        other_externals_by_name.setdefault(clean_name(elem.name),
-                                           []).append(elem)
+        other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
         stack += elem.children
 
     stack = list(external_elem.children)
@@ -315,8 +297,7 @@ def analyze_3rdparty(external_elem, sbom):
     other_externals_by_name = {}
     while stack:
         elem = stack.pop(0)
-        other_externals_by_name.setdefault(clean_name(elem.name),
-                                           []).append(elem)
+        other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
         stack += elem.children
 
     stack = list(external_elem.children)
@@ -331,8 +312,7 @@ class SBOM:
     BASIC_INFO = {
         'bomFormat': 'CycloneDX',
         'specVersion': '1.3',
-        'serialNumber':
-        'urn:uuid:1f860713-54b9-4253-ba5a-9554851904af',  # TODO what?
+        'serialNumber': 'urn:uuid:1f860713-54b9-4253-ba5a-9554851904af',  # TODO what?
         'version': 1,
         'metadata': {
             'timestamp': time.ctime(),
@@ -386,10 +366,7 @@ def analyze_component_section(elem, sbom):
     for repo in elem.children:
         if 'type' in repo.attrs:
             if 'repo_url' in repo.attrs:
-                c['externalReferences'].append({
-                    'url': repo['repo_url'],
-                    'type': 'vcs'
-                })
+                c['externalReferences'].append({'url': repo['repo_url'], 'type': 'vcs'})
             else:
                 # HACK
                 c['externalReferences'].append({
@@ -407,8 +384,7 @@ def generate_from_sgraph(sgraph: SGraph):
     for elem in sgraph.rootNode.children:
         print(elem.name)
         for repo_or_ext in elem.children:
-            if repo_or_ext.name == 'External' and repo_or_ext.getType(
-            ) not in {'dir', 'repo'}:
+            if repo_or_ext.name == 'External' and repo_or_ext.getType() not in {'dir', 'repo'}:
                 analyze_3rdparty(repo_or_ext, sbom)
         analyze_component_section(elem, sbom)
     return sbom.as_cyclonedx_json()

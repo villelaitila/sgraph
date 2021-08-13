@@ -1,4 +1,3 @@
-
 class CompareGraphAttrs:
 
     CHANGE_COUNT = "_change_count"
