@@ -20,7 +20,7 @@ def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, rec
         elem = graph.createOrGetElementFromPath(element_path)
         if elem:
             # TODO handle also recursion param
-            subgraph = ModelApi().filter_model(elem)
+            subgraph = ModelApi().filter_model(elem, graph)
             return produce_output(flavour, subgraph)
         else:
             raise Exception(f'Element path {element_path} not found')
