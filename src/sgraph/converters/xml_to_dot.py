@@ -44,4 +44,3 @@ def graph_to_dot(g):
 
 
 graph_to_dot(egm)
-#print(dot)
