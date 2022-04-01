@@ -11,6 +11,7 @@ Example how to use this to parse and handle model files with this tool.
 """
 import io
 import os
+import uuid
 import xml.sax.handler
 import sys
 import collections
@@ -55,8 +56,7 @@ class ParsingIntentionallyAborted(Exception):
 
 class SGraph:
     def __init__(self, root_node=None):
-        self.rootNode = root_node if root_node is not None else SElement(
-            None, '')
+        self.rootNode = root_node if root_node is not None else SElement(None, '')
         self.modelAttrs = {}
         self.metaAttrs = {}
         self.propagateActions = []
@@ -175,8 +175,7 @@ class SGraph:
             return n
 
         def enc_xml_a_v(v):
-            if isinstance(v, collections.Mapping) or isinstance(
-                    v, int) or isinstance(v, float):
+            if isinstance(v, collections.Mapping) or isinstance(v, int) or isinstance(v, float):
                 v = str(v)
             elif isinstance(v, set):
                 v = ';'.join(sorted(v))
@@ -192,71 +191,79 @@ class SGraph:
                 # https://www.w3.org/TR/xml/#NT-AttValue
                 # Forbidden chars are: naked ampersand, left angle bracket, double quote
                 # single quote is fine as we are using double quotes in XML for attributes
-                return v.replace('&', '&amp;').replace('<', '&lt;').replace(
-                    '>',
-                    '&gt;').replace('\n',
-                                    '&' + '#' + '10;').replace('"', '&quot;')
+                return v.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(
+                    '\n', '&' + '#' + '10;').replace('"', '&quot;')
             return ''
 
         def dump_node(c, elem_to_num, reclevel):
             sorted_attrs = sorted(
-                filter(lambda x: not x[0].startswith('_tmp_attr_'),
-                       c.attrs.items()))
+                filter(lambda x: not x[0].startswith('_tmp_attr_'), c.attrs.items()))
             # noinspection PyUnusedLocal
             current_indent = '  '.join(['' for _unused in range(0, reclevel)])
             nattrs = ' '.join([
-                enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"'
-                for x in sorted_attrs if x[0] != 'type'
+                enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
+                if x[0] != 'type'
             ])
             if c.incoming and c not in elem_to_num:
-                sys.stderr.write(
-                    'Error, Producing erroneous model with references to ' +
-                    c.getPath() + '\n')
+                sys.stderr.write('Error, Producing erroneous model with references to ' +
+                                 c.getPath() + '\n')
             if c.getType() != '':
-                nattrs = ' t="' + c.getType(
-                ) + '"\n' + current_indent + '  ' + nattrs
+                nattrs = ' t="' + c.getType() + '"\n' + current_indent + '  ' + nattrs
             else:
                 if nattrs != '':
                     nattrs = '\n' + current_indent + '  ' + nattrs
 
+            x = ''
             if c in elem_to_num:
-                x = 'i="' + elem_to_num[c] + '"'
-                f.write(current_indent)
-                f.write('<e ' + x + ' n="' + enc_xml_a_v(c.name) + '" ' +
-                        nattrs + '>\n')
-            else:
-                f.write(current_indent)
-                f.write('<e n="' + enc_xml_a_v(c.name) + '" ' + nattrs + '>\n')
-
-            groups = SGraph.groupea(c.outgoing)
-            for ealist, deptype, ea_attrs in groups:
-                elem_numbers = []
-                for ea in ealist:
-                    if ea.toElement in elem_to_num:
-                        elem_numbers.append(elem_to_num[ea.toElement])
-                    else:
-                        sys.stderr.write('No numeric id for ' +
-                                         ea.toElement.getPath() +
-                                         '  dependency from ' +
-                                         ea.fromElement.name + '\n')
-                idrefs = ','.join(sorted(set(elem_numbers)))
-                if idrefs:
-                    # idrefs = ','.join(map(lambda x: str(x.toElement.num), g))
-                    sorted_attrs = sorted(ea_attrs.items())
-                    ea_attrs_str = ' '.join([
-                        enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"'
-                        for x in sorted_attrs
-                    ])
-                    if deptype is None:
-                        deptype = ''
-                    f.write('  <r r="' + idrefs + '" t="' + deptype + '" ' +
-                            ea_attrs_str + '/>\n')
-
-            for cc in sorted(c.children, key=lambda x: x.name):
-                dump_node(cc, elem_to_num, reclevel + 1)
-
+                x = ' i="' + elem_to_num[c] + '" '
             f.write(current_indent)
-            f.write('</e>\n')
+            written_elem_tag = False
+            written_attrs = False
+            try:
+                f.write('<e ' + x + ' n="' + enc_xml_a_v(c.name) + '" ')
+                written_elem_tag = True
+                f.write(nattrs)
+                written_attrs = True
+                f.write('>\n')
+                groups = SGraph.groupea(c.outgoing)
+                for ealist, deptype, ea_attrs in groups:
+                    elem_numbers = []
+                    for ea in ealist:
+                        if ea.toElement in elem_to_num:
+                            elem_numbers.append(elem_to_num[ea.toElement])
+                        else:
+                            sys.stderr.write(f'No numeric id for {ea.toElement.getPath()} dep '
+                                             f'from {ea.fromElement.name}\n')
+                    idrefs = ','.join(sorted(set(elem_numbers)))
+                    if idrefs:
+                        # idrefs = ','.join(map(lambda x: str(x.toElement.num), g))
+                        sorted_attrs = sorted(ea_attrs.items())
+                        ea_attrs_str = ' '.join([
+                            enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
+                        ])
+                        if deptype is None:
+                            deptype = ''
+                        f.write('  <r r="' + idrefs + '" t="' + deptype + '" ' + ea_attrs_str +
+                                '/>\n')
+
+                for cc in sorted(c.children, key=lambda x: x.name):
+                    dump_node(cc, elem_to_num, reclevel + 1)
+
+                f.write(current_indent)
+                f.write('</e>\n')
+
+            except UnicodeEncodeError:
+                if not written_elem_tag:
+                    sys.stderr.write(f'UnicodeEncodeError when writing elem name for some child of '
+                                     f'{c.parent.getPath()}, skipping element\n')
+                    variable_part = str(uuid.uuid4())[:8]
+                    f.write(f'<e {x} n="MALFORMED_NAME__{variable_part}"/>\n')
+                elif not written_attrs:
+                    sys.stderr.write(f'UnicodeEncodeError when writing attributes of '
+                                     f'{c.parent.getPath()}, skipping attributes and contents\n')
+                    f.write(' />\n')
+                else:
+                    raise Exception(f'UnicodeEncodeError with {c.parent.getPath()}, had to abort.')
 
         for c in rootNode.children:
             dump_node(c, elem_to_num, 2)
@@ -279,14 +286,12 @@ class SGraph:
         withAttributes = True
         printedNodes = {}
 
-        autogeneratedAttributeNames = [
-            'user_count', 'used_count', 'coupling', 'childcount'
-        ]
+        autogeneratedAttributeNames = ['user_count', 'used_count', 'coupling', 'childcount']
 
         def encodeForDeps(s):
             if isinstance(s, str):
-                return s.replace('\r\n', '<NEWLINE>').replace(
-                    '\r', '<NEWLINE>').replace('\n', '<NEWLINE>')
+                return s.replace('\r\n', '<NEWLINE>').replace('\r', '<NEWLINE>').replace(
+                    '\n', '<NEWLINE>')
             return str(s)
 
         if withAttributes:
@@ -309,8 +314,7 @@ class SGraph:
                             continue
                         if p is None:
                             p = x.getPath()
-                        f.write('@' + p + ':' + attrname + ':' +
-                                encodeForDeps(attrval) + '\n')
+                        f.write('@' + p + ':' + attrname + ':' + encodeForDeps(attrval) + '\n')
                         did_something = True
                     if did_something:
                         printedNodes[x] = 1
@@ -318,8 +322,7 @@ class SGraph:
                     if p is None:
                         p = x.getPath()
                     if len(p) > 1:
-                        f.write('@' + p + ':type:' +
-                                encodeForDeps(x.getType()) + '\n')
+                        f.write('@' + p + ':type:' + encodeForDeps(x.getType()) + '\n')
                     printedNodes[x] = 1
 
             self.rootNode.traverseElements(handleElem)
@@ -346,8 +349,7 @@ class SGraph:
                         if m is not None:
                             for depattr, depattrval in list(m.items()):
                                 if not depattr == 'type':
-                                    f.write('@@' + depattr + ':' +
-                                            str(depattrval) + '\n')
+                                    f.write('@@' + depattr + ':' + str(depattrval) + '\n')
                     else:
                         f.write('\n')
 
@@ -378,9 +380,7 @@ class SGraph:
         withAttributes = True
         printedNodes = {}
 
-        autogeneratedAttributeNames = [
-            'user_count', 'used_count', 'coupling', 'childcount'
-        ]
+        autogeneratedAttributeNames = ['user_count', 'used_count', 'coupling', 'childcount']
         attrs = []
         deps = []
 
@@ -499,14 +499,12 @@ class SGraph:
                 if k not in a:
                     deptype_counts_delta[k] = b[k]
 
-            delta = (stats[0] - prev[0], stats[1] - prev[1],
-                     deptype_counts_delta, stats[3] - prev[3])
+            delta = (stats[0] - prev[0], stats[1] - prev[1], deptype_counts_delta,
+                     stats[3] - prev[3])
         return delta
 
     @staticmethod
-    def parse_xml_or_zipped_xml(model_file_path,
-                                type_rules=None,
-                                ignored_attributes=None,
+    def parse_xml_or_zipped_xml(model_file_path, type_rules=None, ignored_attributes=None,
                                 only_root=False):
         if isinstance(model_file_path, str) and '.xml.zip' in model_file_path:
             with open(model_file_path, 'rb') as filehandle:
@@ -514,20 +512,15 @@ class SGraph:
                 data = zfile.open('modelfile.xml', 'r')
                 data = io.TextIOWrapper(data)
                 zfile.close()
-                m = SGraph.parse_xml(data, type_rules, ignored_attributes,
-                                     only_root)
+                m = SGraph.parse_xml(data, type_rules, ignored_attributes, only_root)
                 m.set_model_path(model_file_path)
         else:
-            m = SGraph.parse_xml(model_file_path, type_rules,
-                                 ignored_attributes, only_root)
+            m = SGraph.parse_xml(model_file_path, type_rules, ignored_attributes, only_root)
             m.set_model_path(model_file_path)
         return m
 
     @staticmethod
-    def parse_xml(filename_or_stream,
-                  type_rules=None,
-                  ignored_attributes=None,
-                  only_root=False):
+    def parse_xml(filename_or_stream, type_rules=None, ignored_attributes=None, only_root=False):
         class SGraphXMLParser(xml.sax.handler.ContentHandler):
             def __init__(self):
                 super().__init__()
@@ -577,14 +570,12 @@ class SGraph:
                     if self.currentRelation is not None:
                         self.currentRelation[name] = value
                     else:
-                        if self.currentElement is not None and len(
-                                self.currentElementPath) > 0:
+                        if self.currentElement is not None and len(self.currentElementPath) > 0:
                             self.property += 1
                             if name not in self.ignored_attributes:
                                 self.currentElement.addAttribute(name, value)
                         else:
-                            print(('discarding ' + name + ' ' + value +
-                                   ' name value pair'))
+                            print(('discarding ' + name + ' ' + value + ' name value pair'))
 
                 elif qualifiedName == 'e':
                     name = atts.get('n')
@@ -610,8 +601,7 @@ class SGraph:
                             e.addAttribute(aname, avalue)
 
                     if self.only_root:
-                        raise ParsingIntentionallyAborted(
-                            'Aborted intentionally')
+                        raise ParsingIntentionallyAborted('Aborted intentionally')
 
                 elif qualifiedName == 'r':
                     self.currentRelation = {}
@@ -621,10 +611,7 @@ class SGraph:
                     if not redirectEnabled:
                         self.link += 1
                         if ',' in referred:
-                            for referred_ in [
-                                    x for x in referred.split(',')
-                                    if len(x) > 0
-                            ]:
+                            for referred_ in [x for x in referred.split(',') if len(x) > 0]:
                                 self.createReference(referred_, t)
                         else:
                             self.createReference(referred, t)
@@ -665,8 +652,7 @@ class SGraph:
                     pass  # all is fine
                 elif t in self.acceptableAssocTypes:
                     pass  # ok
-                elif self.acceptableAssocTypes is not None and len(
-                        self.acceptableAssocTypes) == 0:
+                elif self.acceptableAssocTypes is not None and len(self.acceptableAssocTypes) == 0:
                     # do not accept any deps
                     return
                 else:
@@ -692,12 +678,8 @@ class SGraph:
                             ea.toElement = self.id_to_elem_map[ea.toElement]
                             ea.toElement.incoming.append(ea)
                         else:
-                            sys.stderr.write(
-                                f'Error: unknown id {ea.toElement} n={elem.name}\n'
-                            )
-                            raise Exception(
-                                f'Error: unknown id in input data: {ea.toElement}'
-                            )
+                            sys.stderr.write(f'Error: unknown id {ea.toElement} n={elem.name}\n')
+                            raise Exception(f'Error: unknown id in input data: {ea.toElement}')
 
                     for child in elem.children:
                         stack.append(child)
@@ -785,8 +767,8 @@ class SGraph:
                             lastEA.attrs[key] = rest
                         else:
                             sys.stderr.write(
-                                'Data format handling error: dep attr not handled properly. line='
-                                + line + '\n')
+                                'Data format handling error: dep attr not handled properly. line=' +
+                                line + '\n')
 
             elif len(line) > 0 and line[0] == '@':
                 firstPos = line.find(':', 1)
@@ -884,8 +866,7 @@ class SGraph:
 
         def plantuml_element_type(e):
             # TODO Check the rest of types
-            if e.getType() == 'file' or e.getType() == 'class' or e.getType(
-            ) == 'package':
+            if e.getType() == 'file' or e.getType() == 'class' or e.getType() == 'package':
                 return e.getType()
             return 'component'
 
@@ -908,8 +889,7 @@ class SGraph:
                     if d2 is not None:
                         postfix = ' : ' + d2
                     used = plantuml_id(assoc.toElement)
-                    f.write(indent + ' ' + used + ' ' + d1 + ' ' + e_name +
-                            postfix + '\n')
+                    f.write(indent + ' ' + used + ' ' + d1 + ' ' + e_name + postfix + '\n')
 
             if not is_leaf:
                 if e.children is not None:
@@ -976,32 +956,27 @@ class SGraph:
             outgoing = list(a.outgoing)
             if elem_of_primary_model:
                 for ea in elem_of_primary_model.outgoing:
-                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(
-                        ea, outgoing)
+                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(ea, outgoing)
                     if corresponding_ea:
                         outgoing.remove(corresponding_ea)
                         corresponding_ea.attrs.update(ea.attrs)
             if elem_of_secondary_model:
                 for ea in elem_of_secondary_model.outgoing:
-                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(
-                        ea, outgoing)
+                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(ea, outgoing)
                     if corresponding_ea:
                         outgoing.remove(corresponding_ea)
                         corresponding_ea.attrs.update(ea.attrs)
 
-        SGraph.recurse_three_models(self.rootNode, primary_model.rootNode,
-                                    secondary_model.rootNode, visit)
+        SGraph.recurse_three_models(self.rootNode, primary_model.rootNode, secondary_model.rootNode,
+                                    visit)
 
     @staticmethod
     def recurse_three_models(elem_a, elem_b, elem_c, visitor_func):
         visitor_func(elem_a, elem_b, elem_c)
         for child_a in elem_a.children:
-            child_b = elem_b.getChildByName(
-                child_a.name) if elem_b is not None else None
-            child_c = elem_c.getChildByName(
-                child_a.name) if elem_c is not None else None
-            SGraph.recurse_three_models(child_a, child_b, child_c,
-                                        visitor_func)
+            child_b = elem_b.getChildByName(child_a.name) if elem_b is not None else None
+            child_c = elem_c.getChildByName(child_a.name) if elem_c is not None else None
+            SGraph.recurse_three_models(child_a, child_b, child_c, visitor_func)
 
     def set_model_path(self, filepath):
         self.modelAttrs['model_path'] = filepath
