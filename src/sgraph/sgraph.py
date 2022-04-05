@@ -191,6 +191,7 @@ class SGraph:
                 # https://www.w3.org/TR/xml/#NT-AttValue
                 # Forbidden chars are: naked ampersand, left angle bracket, double quote
                 # single quote is fine as we are using double quotes in XML for attributes
+                v = v.encode('utf-8', 'replace').decode()
                 return v.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(
                     '\n', '&' + '#' + '10;').replace('"', '&quot;')
             return ''
