@@ -155,14 +155,16 @@ class ModelApi:
         # Traverse related elements from the source_graph using stack
         while stack:
             elem = stack.pop(0)
+            new_elem = sub_graph.createOrGetElement(elem)
+            new_elem.attrs = elem.attrs
             for ea in elem.outgoing:
-                selem_from = sub_graph.createOrGetElement(ea.fromElement)
+                selem_from = new_elem
                 selem_to = sub_graph.createOrGetElement(ea.toElement)
                 sea = SElementAssociation(selem_from, selem_to, ea.deptype, ea.attrs)
                 sea.initElems()
             for ea in elem.incoming:
                 selem_from = sub_graph.createOrGetElement(ea.fromElement)
-                selem_to = sub_graph.createOrGetElement(ea.toElement)
+                selem_to = new_elem
                 sea = SElementAssociation(selem_from, selem_to, ea.deptype, ea.attrs)
                 sea.initElems()
             stack.extend(elem.children)
