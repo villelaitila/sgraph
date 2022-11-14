@@ -11,9 +11,12 @@ def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, rec
     modelfile = get_latest_model(output_dir, analysis_target_name)
     if modelfile is None:
         raise Exception(f'Cannot find model for {analysis_target_name} under {output_dir}')
-    with open(modelfile, 'rb') as filehandle:
-        zfile = zipfile.ZipFile(filehandle)
-        data = zfile.open('modelfile.xml', 'r')
+    with zipfile.ZipFile(modelfile) as zfile:
+        # We need to support old and new file names (if analysis is not run
+        # for a long time, there can be modelfile in the old location but not
+        # in the new location) so don't use hardcoded filename here
+        file_name = zfile.namelist()[0]
+        data = zfile.open(file_name, 'r')
         data = io.TextIOWrapper(data)
         zfile.close()
         graph = SGraph.parse_xml(data)
@@ -42,9 +45,15 @@ def get_latest_model(output_dir, analysis_target_name):
         for o in os.listdir(target_dir):
             ts_dir = target_dir + '/' + o
             if os.path.isdir(ts_dir):
-                modelpath = ts_dir + '/dependency/modelfile.xml.zip'
+                # Try the new location first
+                modelpath = ts_dir + '/model.xml.zip'
                 if os.path.exists(modelpath):
                     modelpaths.append(modelpath)
+                else:
+                    # Use old modelpath
+                    modelpath = ts_dir + '/dependency/modelfile.xml.zip'
+                    if os.path.exists(modelpath):
+                        modelpaths.append(modelpath)
     if modelpaths:
         modelpaths.sort()
         modelpath = modelpaths[-1]
