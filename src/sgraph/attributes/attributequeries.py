@@ -3,8 +3,8 @@ import sys
 import zipfile
 from collections import defaultdict
 from typing import Dict, Set
+import subprocess
 
-import delegator
 import pandas as pd
 from pandas.errors import EmptyDataError
 
@@ -242,7 +242,7 @@ def get_files_modified_since_fork(repo_dir, base_sha, head_sha, log, project_dir
     diff_cmd = 'git -C {} diff --ignore-submodules=all --no-commit-id --name-status -r {}...{}' \
         .format(repo_dir, base_sha, head_sha)
     log.info("Git diff_cmd: {}".format(diff_cmd))
-    diff_result = delegator.run(diff_cmd).out.strip().splitlines()
+    diff_result = subprocess.getoutput(diff_cmd).strip().splitlines()
 
     # Commented out this diff result logging
     # log.info("Git diff_result: {}".format(diff_result))
@@ -284,8 +284,8 @@ def get_files_modified_by_commit(main_dir, commit_sha, repo_name) -> Set[str]:
     git_dir = find_git_dir(main_dir, repo_name)
     committed_files_cmd = 'git -C {} diff-tree --ignore-submodules=all --no-commit-id --name-stat' \
                           'us -r {}'
-    files = delegator.run(committed_files_cmd.format(git_dir, commit_sha)) \
-        .out.strip().splitlines()
+    files = subprocess.getoutput(committed_files_cmd.format(git_dir, commit_sha)) \
+        .strip().splitlines()
     for f in files:
         status, path = f.split(None, 1)
         options = dict(A='added', M='changed', D='removed')
@@ -460,7 +460,7 @@ def get_commits_after_forkpoint(main_dir, base_sha, head_sha, repo_name, log, se
             repo_id = repoinfo['id']
             git_dir = find_git_dir(main_dir, repoinfo['id'])
             cmd = 'git -C "{}" rev-list "{}..{}"'.format(git_dir, base_sha, head_sha)
-            commits = [c.strip() for c in delegator.run(cmd).out.splitlines()]
+            commits = [c.strip() for c in subprocess.getoutput(cmd).splitlines()]
 
         elif 'fork_point' in repoinfo:
             if repoinfo['fork_point'] == base_sha:
