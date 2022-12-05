@@ -510,7 +510,7 @@ class SGraph:
         if isinstance(model_file_path, str) and '.xml.zip' in model_file_path:
             with open(model_file_path, 'rb') as filehandle:
                 zfile = zipfile.ZipFile(filehandle)
-                data = zfile.open('modelfile.xml', 'r')
+                data = zfile.open(zfile.namelist()[0], 'r')
                 data = io.TextIOWrapper(data)
                 zfile.close()
                 m = SGraph.parse_xml(data, type_rules, ignored_attributes, only_root)
