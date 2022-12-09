@@ -1,7 +1,7 @@
 import sys
 from typing import Optional, Dict
 
-from sgraph.selementmergedexception import SElementMergedException
+from sgraph.exceptions import SElementMergedException
 from sgraph.selementassociation import SElementAssociation
 
 DEBUG = False
