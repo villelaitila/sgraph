@@ -2,6 +2,7 @@ import io
 import os
 import zipfile
 
+from sgraph.exceptions import ModelNotFoundException
 from sgraph.converters.sgraph_to_cytoscape import graph_to_cyto
 from sgraph import ModelApi
 from sgraph import SGraph
@@ -10,7 +11,8 @@ from sgraph import SGraph
 def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, recursion, flavour):
     modelfile = get_latest_model(output_dir, analysis_target_name)
     if modelfile is None:
-        raise Exception(f'Cannot find model for {analysis_target_name} under {output_dir}')
+        raise ModelNotFoundException(
+            f'Cannot find model for {analysis_target_name} under {output_dir}')
     with zipfile.ZipFile(modelfile) as zfile:
         # We need to support old and new file names (if analysis is not run
         # for a long time, there can be modelfile in the old location but not
