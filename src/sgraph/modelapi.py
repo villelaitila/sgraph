@@ -159,9 +159,13 @@ class ModelApi:
             new_elem.attrs = elem.attrs
             for ea in elem.outgoing:
                 selem_from = new_elem
-                selem_to = sub_graph.createOrGetElement(ea.toElement)
+                to_element = ea.toElement
+                selem_to = sub_graph.createOrGetElement(to_element)
                 sea = SElementAssociation(selem_from, selem_to, ea.deptype, ea.attrs)
                 sea.initElems()
+                if len(to_element.children) > 0:
+                    for child in to_element.children:
+                        sub_graph.createOrGetElement(child)
             for ea in elem.incoming:
                 selem_from = sub_graph.createOrGetElement(ea.fromElement)
                 selem_to = new_elem

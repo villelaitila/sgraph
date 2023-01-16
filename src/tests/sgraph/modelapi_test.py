@@ -2,6 +2,7 @@ from src.sgraph.modelapi import ModelApi
 from src.sgraph.loader import ModelLoader
 import os
 
+MODEL_PATH = '/nginx/src/core/'
 
 # Helper for creating the model and model api
 def get_model_and_model_api(file_name):
@@ -26,3 +27,13 @@ def test_filter_model():
     # Subgraph should now have nginx but not foo
     assert 1 == len(subgraph1.rootNode.children)
     assert "nginx" == subgraph1.rootNode.children[0].name
+
+
+def test_filter_model_keeps_children_of_outgoing_dependency():
+    model, model_api = get_model_and_model_api('modelfile.xml')
+    nginxc_element = model.createOrGetElementFromPath(f'{MODEL_PATH}nginx.c')
+    subgraph = model_api.filter_model(nginxc_element, model)
+    nginxh_element = subgraph.createOrGetElementFromPath(f'{MODEL_PATH}nginx.h')
+    assert 1 == len(nginxh_element.children)
+    assert 'testname' == nginxh_element.children[0].name
+    assert 'testtype' == nginxh_element.children[0].attrs['type']
