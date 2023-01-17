@@ -484,6 +484,25 @@ class SGraph:
                 return p.createElements(elems, i)
         return p
 
+    def create_or_get_element(self, elem: SElement):
+        """
+        Create or get element matching this element, yielding also boolean to indicate if new was
+        created.
+        :param elem:
+        :return: tuple of the matched element and boolean describing if new element was created.
+        """
+        elems = list(reversed(elem.getPathAsList()))
+
+        p = self.rootNode
+        for i in range(len(elems)):
+            s = elems[i]
+            child = p.getChildByName(s)
+            if child is not None:
+                p = child
+            else:
+                return p.createElements(elems, i), True
+        return p, False
+
     @staticmethod
     def calculate_model_stats_delta(prev, stats):
         delta = None
@@ -705,9 +724,11 @@ class SGraph:
                 pass
 
         a.translateReferences()
-        egm = SGraph(a.rootNode)
+        graph = SGraph(a.rootNode)
+        if len(graph.rootNode.children) == 0:
+            sys.stderr.write('Warning: Parsing the model file did not yield any elements.')
 
-        return egm
+        return graph
 
     @staticmethod
     def parse_deps(filename):
