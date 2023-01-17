@@ -354,6 +354,10 @@ def read_attrs_generic(attrfilepath):
         if os.path.exists(attrfilepath + '.zip'):
             attrfilepath += '.zip'
 
+    if not os.path.exists(attrfilepath):
+        return [], []
+        # raise Exception('Cannot find attribute file')
+
     # TODO Autodetect csv separator based on first line characters.
     separator = autodetect_csv_separator(attrfilepath)
     try:
