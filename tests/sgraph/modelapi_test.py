@@ -87,3 +87,33 @@ def test_filter_model_with_indirect():
     )
     assert None is not elem
     assert 'testvalue2' == elem.attrs['test_attribute2']
+
+
+def test_filter_model_with_indirect_incoming():
+    model, model_api = get_model_and_model_api('modelfile.xml')
+    used_indirectly_element = model.createOrGetElementFromPath(
+        '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
+    subgraph = model_api.filter_model(
+        used_indirectly_element, model,
+        filter_outgoing=FilterAssocations.Ignore,
+        filter_incoming=FilterAssocations.DirectAndIndirect)
+    # Subgraph root should have all children but foo
+    # (no dependencies reach foo)
+    assert len(subgraph.rootNode.children) == 4, \
+        'subgraph root node did not have correct amount of children'
+
+
+def test_filter_model_with_indirect_outcoming_incoming():
+    model, model_api = get_model_and_model_api('modelfile_direct_indirect.xml')
+    used_indirectly_element = model.createOrGetElementFromPath(
+        '/foo/bar')
+    subgraph = model_api.filter_model(
+        used_indirectly_element, model,
+        filter_outgoing=FilterAssocations.DirectAndIndirect,
+        filter_incoming=FilterAssocations.DirectAndIndirect)
+
+    # Subgraph should have other-1 as the only child of other (not other-2)
+    other = subgraph.rootNode.children[1]
+    assert other.name == 'other'
+    assert len(other.children) == 1
+    assert other.children[0].name == 'other-1'

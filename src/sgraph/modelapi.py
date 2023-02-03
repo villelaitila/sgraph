@@ -225,8 +225,8 @@ class ModelApi:
             elif filter_setting == FilterAssocations.DirectAndIndirect:
                 # Get all indirectly and directly used elements into the subgraph, including
                 # their descendant elements.
-                if ea.toElement not in handled:
-                    stack.append(ea.toElement)
+                if related_elem not in handled:
+                    stack.append(related_elem)
 
         handled = set()
         # Traverse related elements from the source_graph using stack

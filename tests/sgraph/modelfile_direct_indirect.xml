@@ -1,0 +1,22 @@
+<model version="2.1">
+  <elements>
+    <e n="foo" >
+      <e i="2" n="bar" >
+          <r r="6" t="inc" />
+      </e>
+    </e>
+    <e n="depends-on-bar" >
+        <e i="3" n="depends-directly-from-bar"  >
+          <r r="2" t="inc" />
+        </e>
+        <e i="4" n="depends-indirectly-from-bar">
+          <r r="3" t="inc" />
+          <r r="6" t="inc" />
+        </e>
+    </e>
+    <e n="other" >
+      <e i="6" n="other-1"></e>
+      <e i="7" n="other-2"></e>
+    </e>
+  </elements>
+</model>
