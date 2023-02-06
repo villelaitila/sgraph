@@ -161,7 +161,7 @@ class ModelApi:
         """
         Filter a sub graph from source_graph related to source elem.
 
-        When executing model_filter for elem e with "Ignore" mode, it ignores elements
+        When executing filter_model for element e with "Ignore" mode, it ignores elements
         that are external to e.
 
         "Direct" mode changes this behavior: it picks also external elements associated
@@ -225,8 +225,8 @@ class ModelApi:
             elif filter_setting == FilterAssocations.DirectAndIndirect:
                 # Get all indirectly and directly used elements into the subgraph, including
                 # their descendant elements.
-                if ea.toElement not in handled:
-                    stack.append(ea.toElement)
+                if related_elem not in handled:
+                    stack.append(related_elem)
 
         handled = set()
         # Traverse related elements from the source_graph using stack
