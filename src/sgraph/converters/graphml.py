@@ -12,7 +12,7 @@ from sgraph import SGraph, SElement, SElementAssociation
 Y_NS = 'http://www.yworks.com/xml/graphml'
 Y_NS_IN_BRACES = '{http://www.yworks.com/xml/graphml}'
 GD_NS_IN_BRACES = '{http://graphml.graphdrawing.org/xmlns}'
-
+XML_NS_IN_BRACES = '{{http://www.w3.org/XML/1998/namespace}'
 
 def handle_realizers(realizers):
     nodelabel = ''
@@ -51,8 +51,8 @@ def handle_node(node: Element, parent_elem: SElement, node_id_to_element, graphm
             key_content = graphml_keys[data.attrib['key']]
             if 'attr.name' in key_content:
                 attr_name = key_content['attr.name']
-                if '{http://www.w3.org/XML/1998/namespace}space' in data.attrib:
-                    # preserve? = data.attrib['{http://www.w3.org/XML/1998/namespace}space']
+                if f'{XML_NS_IN_BRACES}space' in data.attrib:
+                    # preserve? = data.attrib[f'{XML_NS_IN_BRACES}space']
                     pass
 
                 attrs[attr_name] = data.text
@@ -71,6 +71,8 @@ def handle_node(node: Element, parent_elem: SElement, node_id_to_element, graphm
         sys.stderr.write('Cannot handle node ' + elem_id)
         return
 
+    # Prevent slash character in node label to cause sub elements in sgraph side.
+    elem_id = elem_id.replace('/', '__slash__')
     if elem_id in parent_elem.childrenDict:
         raise Exception('Overlapping node: ' + parent_elem.getPath() + '/' + elem_id)
     else:
@@ -122,7 +124,8 @@ def handle_graph(input_graph, graphml_keys, node_id_to_element, parent_elem, rec
     for input_data in input_graph.findall(f'{GD_NS_IN_BRACES}data'):
         if input_data.attrib['key'] in graphml_keys:
             attr_name = graphml_keys[input_data.attrib['key']]['attr.name']
-            attrs[attr_name] = input_data.attrib['{http://www.w3.org/XML/1998/namespace}space']
+            if f'{XML_NS_IN_BRACES}space' in input_data.attrib:
+                attrs[attr_name] = input_data.attrib[f'{XML_NS_IN_BRACES}space']
 
     for node in input_graph.findall(f'{GD_NS_IN_BRACES}node'):
         handle_node(node, parent_elem, node_id_to_element, graphml_keys, recursion)
@@ -136,7 +139,9 @@ def handle_main_level_graph(input_graph, graphml_keys, node_id_to_element, paren
     for input_data in input_graph.findall(f'{GD_NS_IN_BRACES}data'):
         if input_data.attrib['key'] in graphml_keys:
             attr_name = graphml_keys[input_data.attrib['key']]['attr.name']
-            attrs[attr_name] = input_data.attrib['{http://www.w3.org/XML/1998/namespace}space']
+            if f'{XML_NS_IN_BRACES}space' in input_data.attrib:
+                attrs[attr_name] = input_data.attrib[f'{XML_NS_IN_BRACES}space']
+                # TODO Parse from node data?
 
     for node in input_graph.findall(f'{GD_NS_IN_BRACES}node'):
         handle_node(node, parent_elem, node_id_to_element, graphml_keys, recursion)
@@ -248,8 +253,7 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
         graph = etree.SubElement(elem_dom, 'graph')
         graph.set('edgedefault', 'directed')
 
-        elem_id = current_node_id + ':'
-        graph.set('id', elem_id)
+        graph.set('id', current_node_id + ':')
 
         for child in e.children:
             child_node_id = f'{current_node_id}:n{id_counter[e]}'
@@ -351,7 +355,7 @@ def generate_graphml_element_and_main_graph():
     out_graph = etree.SubElement(graphml, 'graph')
     out_graph.set('id', 'G')
     out_graph.set('edgedefault', 'directed')
-    etree.SubElement(out_graph, 'data', {'key': 'd0', 'space': 'preserve'})
+    etree.SubElement(out_graph, 'data', {'key': 'd0', f'space': 'preserve'})
     data = etree.SubElement(graphml, 'data', {'key': 'd7'})
     etree.SubElement(data, f'{{{Y_NS}}}Resources')
     return graphml, out_graph
