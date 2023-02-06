@@ -161,7 +161,7 @@ class ModelApi:
         """
         Filter a sub graph from source_graph related to source elem.
 
-        When executing model_filter for elem e with "Ignore" mode, it ignores elements
+        When executing filter_model for element e with "Ignore" mode, it ignores elements
         that are external to e.
 
         "Direct" mode changes this behavior: it picks also external elements associated
