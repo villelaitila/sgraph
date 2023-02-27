@@ -4,6 +4,45 @@ from sgraph.algorithms.selementutils import lowest_common_ancestor
 class SElementAssociation:
     __slots__ = 'deptype', 'fromElement', 'toElement', 'attrs'
 
+    @staticmethod
+    def create_unique_element_association(
+            from_element, to_element, dependency_type, dependency_attributes):
+        '''Create an association between two elements if there already does not
+        exist a similar association.
+        The association is considered to be similar if to_element has an
+        incoming association with the same type and the same fromElement.
+        :param: from_element the elemenet that is the starting point of the
+            association
+        :param: to_element the element that is the ending point of the
+            association
+        :param: deptype the type of the association
+        :param: depattrs attributes for the associtaion
+        :returns: {SElement, boolean} Return a dict containing the existing
+            or new element and a boolean indicating if a new element was
+            created (true if new was created, false otherwise)'''
+        def filter_existing(incoming):
+            from_element_matches = incoming.fromElement == from_element
+            if dependency_type:
+                return dependency_type == incoming.deptype and \
+                    from_element_matches
+            else:
+                return from_element_matches
+
+        filtered_associations = filter(filter_existing, to_element.incoming)
+        existing_associations = list(filtered_associations)
+
+        # Do not create association if the same association already exists
+        if len(existing_associations) > 0:
+            # Combine attributes to the existing association
+            existing_associations[0].attrs.update(dependency_attributes)
+            return {'existingOrNewAssociation': existing_associations[0],
+                    'isNew': False}
+
+        new_association = SElementAssociation(
+            from_element, to_element, dependency_type, dependency_attributes)
+        new_association.initElems()
+        return {'existingOrNewAssociation': new_association, 'isNew': True}
+
     def __init__(self, fr, to, deptype, depattrs=None):
         self.deptype = deptype
 
