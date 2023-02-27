@@ -1,0 +1,111 @@
+CommandLine:
+  commands+=Command['&&']
+;
+
+Command:
+  pipedCommands+=RealCommand['|']
+;
+
+RealCommand:
+  LsCommand | CdCommand | CatCommand | GrepCommand | EchoCommand | FindCommand | PwdCommand | XargsCommand | MvCommand | RmCommand | MkdirCommand | CpCommand | ExitCommand | SGraphCommand
+;
+
+LsCommand:
+  'ls' LsOptions? path_refs*=PathReference
+;
+
+LsOptions:
+  ( "-ltra" | "-ltr" | "-lt" | "-l" )   // Lazy workaround to support popular combinations
+;
+
+//CdCommand:
+//  'cd' pathParts+=PathPart['/']
+//;
+
+CdCommand:
+  'cd' path_ref=PathReference
+;
+
+PathReference:
+  /[A-Za-z0-9_\/.]+/
+;
+
+CatCommand:
+  'cat ' path_ref=PathReference
+;
+
+PathPart:
+   pathName=ID | relative=DotDot
+;
+
+DotDot:
+   '..'
+;
+
+GrepCommand:
+  'grep' keyword=ID (path_refs+=PathReference[' '] | asterisk='*')?
+;
+
+EchoCommand:
+  'echo' something=ID
+;
+
+FindCommand:
+  'find' path_ref=PathReference find_args=FindArgs?
+;
+
+FindArgs:
+    ( files="-type f" | directories="-type d")
+;
+
+PwdCommand:
+  'pwd'
+;
+
+XargsCommand:
+  'xargs' xargs_sub_command=RealCommand
+;
+
+RmCommand:
+  'rm' path_ref=PathReference
+;
+
+MvCommand:
+  'mv' from_path=PathReference to_path=PathReference
+;
+
+MkdirCommand:
+  'mkdir' MkdirOptions? path_ref=PathReference
+;
+
+MkdirOptions:
+  "-p"
+;
+
+CpCommand:
+  'cp' from_path=PathReference to_path=PathReference
+;
+
+SGraphCommand:
+    'sgraph' SGraphSubCommand
+;
+
+SGraphSubCommand:
+    ( SGraphSaveCommand | SGraphVisualizeCommand )
+;
+
+SGraphSaveCommand:
+    'save' SaveFormatOption? target_file=PathReference
+;
+
+SaveFormatOption:
+    '--format' fileFormat=ID
+;
+
+SGraphVisualizeCommand:
+    'visualize' target_file=PathReference?
+;
+
+ExitCommand:
+  'exit'
+;
