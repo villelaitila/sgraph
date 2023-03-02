@@ -31,7 +31,7 @@ def incoming_deps(elem, elem_name_patterns, deptypes):
                 break
         if name_pat:
             for deptype in deptypes:
-                if ea.typeEquals(deptype):
+                if ea.deptype == deptype:
                     return True
 
 
@@ -70,7 +70,8 @@ def bom_ref(elem, v):
     return f'pkg:{pkgtype}/{pkgid}@{v}'
 
 
-license_mapping = {'FOOBAR': 'XYZZY'}
+# TODO License mapping not implemented
+license_mapping_to_spdx_id = {}
 
 
 def resolve_license_spdx_id(license, elem):
@@ -78,12 +79,17 @@ def resolve_license_spdx_id(license, elem):
     if license in acceptable_licenses:
         return license
     else:
-        if license in license_mapping:
-            return license_mapping[license]
-        return 'SPDX_OTHER_TODO'
+        if license in license_mapping_to_spdx_id:
+            return license_mapping_to_spdx_id[license]
+        return 'UNKNOWN LICENSE'  # TODO What is the proper value for this?
 
 
 def bom_licenses(elem):
+    """
+    TODO License handling is still work-in-progress.
+    :param elem:
+    :return:
+    """
     license_url = {
         'MIT': 'https://spdx.org/licenses/MIT.html',
         'GPL': 'TODO',
@@ -147,6 +153,7 @@ def elem_as_bom_data(elem, other_externals_by_name):
     :return:
     """
     licenses = bom_licenses(elem)
+    output = []
     # type scope
     if 'version' in elem.attrs and ';' in elem.attrs['version']:
         usages = list(map(lambda x: x.fromElement.getPath(), elem.incoming))[0:3]
@@ -185,15 +192,14 @@ def elem_as_bom_data(elem, other_externals_by_name):
                         'type': 'distribution',
                         'url': [elem.attrs['resolved']]
                     }]
-            yield data
-        return
+            output.append(data)
 
     if valid_for_bom(elem):
         v = extract_version(elem)
         if v is None:
             v = ''
         ref = bom_ref(elem, v)
-        return {
+        component = {
             'name': clean_name(elem.name),
             'version': v,
             'bom-ref': ref,
@@ -203,6 +209,7 @@ def elem_as_bom_data(elem, other_externals_by_name):
             'example-usages': list(map(lambda x: x.fromElement.getPath(), elem.incoming))[0:3],
             'description': ''
         }
+        output.append(component)
     else:
         if elem.incoming:
             dep_summary = defaultdict(int)
@@ -213,6 +220,8 @@ def elem_as_bom_data(elem, other_externals_by_name):
                 for e in other_externals_by_name[clean_name(elem.name)]:
                     print('  - ' + e.getPath())
             print(elem.getPath())
+
+    return output
 
 
 def contains_incoming_ea_from_elems(e, elem_patterns):
@@ -366,11 +375,11 @@ def analyze_component_section(elem, sbom):
     for repo in elem.children:
         if 'type' in repo.attrs:
             if 'repo_url' in repo.attrs:
-                c['externalReferences'].append({'url': repo['repo_url'], 'type': 'vcs'})
+                c['externalReferences'].append({'url': repo.attrs['repo_url'], 'type': 'vcs'})
             else:
                 # HACK
                 c['externalReferences'].append({
-                    'url': f'https://github.com/softagram/{repo.name}',
+                    'url': f'https://UNKNOWN-REPOSITORY_LOCATION/{repo.name}',
                     'type': 'vcs'
                 })
     sbom.metadata_component = c
