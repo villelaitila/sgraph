@@ -14,6 +14,7 @@ Y_NS_IN_BRACES = '{http://www.yworks.com/xml/graphml}'
 GD_NS_IN_BRACES = '{http://graphml.graphdrawing.org/xmlns}'
 XML_NS_IN_BRACES = '{{http://www.w3.org/XML/1998/namespace}'
 
+
 def handle_realizers(realizers):
     nodelabel = ''
     realizer = realizers[int(realizers.attrib['active'])]
@@ -206,6 +207,11 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
         elem_dom.set('yfiles.foldertype', 'group')
     element_to_id_map[e] = current_node_id
 
+    fill_color = e.attrs.get('style__fill_color', '#FFF7C8')
+    bg_color = e.attrs.get('style__background_color_for_label', '#EBEBEB')
+    border_color = e.attrs.get('style__border_color', '#000000')
+    text_color = e.attrs.get('style__text_color', '#000000')
+
     if 'description' in e.attrs:
         etree.SubElement(elem_dom, 'data', {'key': 'd5'}).text = e.attrs['description'].strip()
 
@@ -222,7 +228,7 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
                 group, f'{Y_NS_IN_BRACES}NodeLabel', {
                     'alignment': 'right',
                     'autoSizePolicy': 'node_width',
-                    'backgroundColor': "#EBEBEB",
+                    'backgroundColor': bg_color,
                     'borderDistance': "0.0",
                     'fontFamily': "Dialog",
                     'fontSize': "15",
@@ -233,7 +239,7 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
                     'iconTextGap': "4",
                     'modelName': "internal",
                     'modelPosition': "t",
-                    'textColor': "#000000",
+                    'textColor': text_color,
                     'verticalTextPosition': "bottom",
                     'visible': "true",
                     'width': "273.0",
@@ -241,9 +247,12 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
                     'y': '0.0'
                 }).text = e.name
             etree.SubElement(group, f'{{{Y_NS}}}Shape', {'type': 'roundrectangle'})
-            etree.SubElement(group, f'{{{Y_NS}}}Fill', {'color': '#F5F5F5', 'transparent': 'false'})
+            etree.SubElement(group, f'{{{Y_NS}}}Fill', {
+                'color': fill_color,
+                'transparent': 'false'
+            })
             etree.SubElement(group, f'{{{Y_NS}}}BorderStyle', {
-                'color': '#000000',
+                'color': border_color,
                 'type': 'line',
                 'width': '1.0'
             })
@@ -264,7 +273,7 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
             d10 = etree.SubElement(elem_dom, 'data', {'key': 'd6'})
             shape_node = etree.SubElement(d10, f'{{{Y_NS}}}ShapeNode')
             etree.SubElement(shape_node, f'{{{Y_NS}}}Geometry', {'height': '30.0', 'width': '213'})
-            etree.SubElement(shape_node, f'{{{Y_NS}}}Fill', {'color': '#FFF7C8'})
+            etree.SubElement(shape_node, f'{{{Y_NS}}}Fill', {'color': fill_color})
             etree.SubElement(shape_node, f'{{{Y_NS}}}BorderStyle', {
                 'hasColor': 'false',
                 'raised': 'false',
@@ -283,7 +292,7 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
                 'horizontalTextPosition': "center",
                 'iconTextGap': "4",
                 'modelName': "custom",
-                'textColor': "#000000",
+                'textColor': text_color,
                 'verticalTextPosition': 'bottom',
                 'visible': "true"
             }
@@ -355,7 +364,7 @@ def generate_graphml_element_and_main_graph():
     out_graph = etree.SubElement(graphml, 'graph')
     out_graph.set('id', 'G')
     out_graph.set('edgedefault', 'directed')
-    etree.SubElement(out_graph, 'data', {'key': 'd0', f'space': 'preserve'})
+    etree.SubElement(out_graph, 'data', {'key': 'd0', 'space': 'preserve'})
     data = etree.SubElement(graphml, 'data', {'key': 'd7'})
     etree.SubElement(data, f'{{{Y_NS}}}Resources')
     return graphml, out_graph
