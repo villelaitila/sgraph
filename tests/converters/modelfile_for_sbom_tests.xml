@@ -1,0 +1,58 @@
+<model version="2.1">
+  <elements>
+    <e n="nginx" >
+      <e n="src" >
+        <e n="core" >
+          <e i="6" n="nginx.c" >
+            <r r="2" t="inc" />
+            <r r="3" t="inc" />
+            <r r="4" t="inc" />
+            <r r="5" t="inc" />
+            <r r="6" t="inc" />
+            <r r="7" t="inc" />
+          </e>
+          <e i="2" n="nginx.h" >
+             <e t="testtype" n="testname"/>
+          </e>
+        </e>
+      </e>
+      <e n="External" >
+        <e n="APT" >
+          <e i="3" n="apache2 of version 3" someattribute="">
+          </e>
+          <e  i="4"  n="zip" version="1.2.3"
+            cpe_uris="cpe:2.3:a:info-zip:zip:2.3:*:*:*:*:*:*:*;cpe:2.3:a:info-zip_project:zip:3.0:*:*:*:*:*:*:*;cpe:2.3:a:zip_project:zip:-:*:*:*:*:*:*:*" matching_product_name_without_version="CVE-2004-1010;CVE-2018-13410;CVE-2018-13684" repotype="APT">
+          </e>
+        </e>
+        <e  n="Assemblies"
+          architecture_modularity="100">
+          <e  n="JetBrains.Annotations"
+            architecture_modularity="100">
+            <e  i="5"  n="JetBrains.Annotations"
+              privateassets="All" version="2022.1.0">
+            </e>
+          </e>
+          <e  n="Meziantou.Analyzer"
+            architecture_modularity="100">
+            <e  i="6"  n="Meziantou.Analyzer"
+              privateassets="all" version="1.0.757">
+            </e>
+          </e>
+
+          <e  n="Microsoft.CodeAnalysis.Analyzers"
+            architecture_modularity="100">
+            <e  i="7"  n="Microsoft.CodeAnalysis.Analyzers"
+              privateassets="all" version="3.3.3">
+            </e>
+          </e>
+        </e>
+        <e  n="Maven"
+            architecture_modularity="100">
+            <e  i="193"  n="aopalliance aopalliance of version 1.0"
+              artifactId="aopalliance" groupId="aopalliance" license="OTHER" license_origin="rest_api" mvn_dep_type="dependencyManagement" repotype="Maven" version="1.0">
+            </e>
+        </e>
+      </e>
+    </e>
+  </elements>
+</model>
