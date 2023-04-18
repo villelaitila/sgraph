@@ -7,8 +7,8 @@ from sgraph import SGraph
 
 
 def valid_for_bom(elem):
-    return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name or \
-        'license' in elem.attrs
+    return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name \
+           or 'license' in elem.attrs
 
 
 def extract_version(elem):
@@ -41,7 +41,6 @@ def parents_parent_or_parent_name_equals(elem, name):
     return elem.parent.parent and elem.parent.parent.name == name
 
 
-
 def bom_ref(elem, v):
     pkgid = elem.name  # todo also use url like github.com/foo/reponame
     if 'from' in elem.attrs:
@@ -50,9 +49,11 @@ def bom_ref(elem, v):
     pkgid = clean_name(pkgid)
     if elem.attrs.get('repotype', '') == 'NPM' or parents_parent_or_parent_name_equals(elem, 'NPM'):
         pkgtype = 'npm'
-    elif elem.attrs.get('repotype', '') == 'APT' or parents_parent_or_parent_name_equals(elem, 'APT'):
+    elif elem.attrs.get('repotype', '') == 'APT' or parents_parent_or_parent_name_equals(
+            elem, 'APT'):
         pkgtype = 'deb'
-    elif elem.parent.name == 'Python' or elem.attrs.get('repotype', '') == 'PIP' or parents_parent_or_parent_name_equals(elem, 'PIP'):
+    elif elem.parent.name == 'Python' or elem.attrs.get(
+            'repotype', '') == 'PIP' or parents_parent_or_parent_name_equals(elem, 'PIP'):
         pkgtype = 'pypi'  # ??
     elif elem.parent.name == 'Go':
         pkgtype = 'golang'
@@ -60,7 +61,9 @@ def bom_ref(elem, v):
         pkgtype = 'maven'
     elif elem.parent.name == 'Java':
         pkgtype = '??Java'
-    elif incoming_deps(elem, ['csproj', 'vbproj'], ['assembly_ref']) or parents_parent_or_parent_name_equals(elem, 'Assemblies'):
+    elif incoming_deps(elem, ['csproj', 'vbproj'],
+                       ['assembly_ref']) or parents_parent_or_parent_name_equals(
+                           elem, 'Assemblies'):
         pkgtype = 'nuget'
     elif '/External/Docker/Image/' in elem.getPath():
         pkgtype = 'docker'
@@ -104,7 +107,12 @@ def bom_licenses(elem):
     }
     if 'license' in elem.attrs:
         license_spdx_id = resolve_license_spdx_id(elem.attrs['license'], elem)
-        return [{'license': {'id': license_spdx_id, 'url': license_url[license_spdx_id]}}]
+        return [{
+            'license': {
+                'id': license_spdx_id,
+                'url': license_url.get(license_spdx_id, 'UNKNOWN')
+            }
+        }]
     return []
 
 
@@ -164,8 +172,9 @@ def elem_as_bom_data(elem, other_externals_by_name):
 
     # Check for some legacy cases that were previosly the convention.
     if ';' in elem.attrs.get('version', '') or ';' in elem.attrs.get('versions', ''):
-        raise Exception(f'Multiple versions associated to a single element {elem.getPath()}, cannot continue')
-        # Multiple versions exist, as merged element (legacy way in sgraph, won't
+        raise Exception(
+            f'Multiple versions associated to a single element {elem.getPath()}, cannot continue'
+        )  # Multiple versions exist, as merged element (legacy way in sgraph, won't
 
     if valid_for_bom(elem):
         v = extract_version(elem)
@@ -192,7 +201,9 @@ def elem_as_bom_data(elem, other_externals_by_name):
             for ea in elem.incoming:
                 dep_summary[(file_extension(ea.fromElement), ea.deptype)] += 1
             if len(other_externals_by_name[clean_name(elem.name)]) > 1:
-                other_excluding_parent = list(filter(lambda x: x != elem.parent, other_externals_by_name[clean_name(elem.name)]))
+                other_excluding_parent = list(
+                    filter(lambda x: x != elem.parent,
+                           other_externals_by_name[clean_name(elem.name)]))
                 if len(other_excluding_parent) > 1:
                     print(f'Processing {elem.getPath()} Other similarly named exists  : ')
                     for e in other_excluding_parent:
@@ -246,8 +257,8 @@ def combine_elems(elem, other_externals_by_name):
                         if e.parent.name == 'External':
                             under_ext = e
                         else:
-                            if better_place is not None and \
-                                    len(e.getPath()) > len(better_place.getPath()):
+                            if better_place is not None and len(e.getPath()) > len(
+                                    better_place.getPath()):
                                 better_place = e
                             elif better_place is None:
                                 better_place = e
@@ -256,8 +267,8 @@ def combine_elems(elem, other_externals_by_name):
                             if n != better_place and n.parent == better_place.parent:
                                 under_ext = n
                     if under_ext and better_place:
-                        if better_place.parent.name == 'PIP' and \
-                                contains_incoming_ea_from_elems(under_ext, ['Dockerfile', '.py']):
+                        if better_place.parent.name == 'PIP' and contains_incoming_ea_from_elems(
+                                under_ext, ['Dockerfile', '.py']):
                             print('MERGING:'
                                   '  ' + better_place.getPath() + ' another elem ' +
                                   under_ext.getPath())
@@ -277,7 +288,6 @@ def analyze_3rdparty(external_elem, sbom):
         elem = stack.pop(0)
         other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
         stack += elem.children
-
     """
     stack = list(external_elem.children)
     while stack:
@@ -285,13 +295,6 @@ def analyze_3rdparty(external_elem, sbom):
         combine_elems(elem, other_externals_by_name)
         stack += elem.children
     """
-
-    stack = list(external_elem.children)
-    other_externals_by_name = {}
-    while stack:
-        elem = stack.pop(0)
-        other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
-        stack += elem.children
 
     stack = list(external_elem.children)
     while stack:
