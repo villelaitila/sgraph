@@ -494,6 +494,8 @@ def get_commits_after_forkpoint(main_dir, base_sha, head_sha, repo_name, log, se
 def get_developers(attrfile_filepath, days=365, zip_format=True):
     """ Returns loc count (*1000) based on the project's attribute file.
 
+    :param days:
+    :param attrfile_filepath:
     :param zip_format: True if csv is zipped, otherwise False
     :return: loc count (*1000)
     """

@@ -93,7 +93,7 @@ def handle_node(node: Element, parent_elem: SElement, node_id_to_element, graphm
     # print('  ' * recursion, elem_id, attrs)
 
     if elem_id == '':
-        sys.stderr.write('Cannot handle node ' + elem_id)
+        sys.stderr.write('Cannot handle node ' + elem_id + ' under ' + parent_elem.getPath())
         return
 
     # Prevent slash character in node label to cause sub elements in sgraph side.

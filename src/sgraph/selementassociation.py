@@ -1,5 +1,8 @@
-from sgraph.algorithms.selementutils import lowest_common_ancestor
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from sgraph import SElement
 
+from sgraph.algorithms.selementutils import lowest_common_ancestor
 
 class SElementAssociation:
     __slots__ = 'deptype', 'fromElement', 'toElement', 'attrs'
@@ -7,7 +10,7 @@ class SElementAssociation:
     @staticmethod
     def create_unique_element_association(
             from_element, to_element, dependency_type, dependency_attributes):
-        '''Create an association between two elements if there already does not
+        """Create an association between two elements if there already does not
         exist a similar association.
         The association is considered to be similar if to_element has an
         incoming association with the same type and the same fromElement.
@@ -19,7 +22,7 @@ class SElementAssociation:
         :param: depattrs attributes for the associtaion
         :returns: {SElement, boolean} Return a dict containing the existing
             or new element and a boolean indicating if a new element was
-            created (true if new was created, false otherwise)'''
+            created (true if new was created, false otherwise)"""
         def filter_existing(incoming):
             from_element_matches = incoming.fromElement == from_element
             if dependency_type:
@@ -49,8 +52,8 @@ class SElementAssociation:
         # Good to have this decommented when testing new analyzers:
         # if fr is not None and fr == to:
         #    sys.stderr.write('Self loop #1\n')
-        self.fromElement = fr
-        self.toElement = to
+        self.fromElement: 'SElement' = fr
+        self.toElement: 'SElement' = to
         if depattrs is not None:
             self.attrs = depattrs
         else:
@@ -95,7 +98,9 @@ class SElementAssociation:
 
     def remove(self):
         self.fromElement.outgoing.remove(self)
+        self.fromElement = None
         self.toElement.incoming.remove(self)
+        self.toElement = None
 
     def addAttribute(self, attr_name, attr_val):
         self.attrs[attr_name] = attr_val

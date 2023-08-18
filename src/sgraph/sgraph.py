@@ -1004,7 +1004,7 @@ class SGraph:
         self.modelAttrs['model_path'] = filepath
 
 
-class Counter():
+class Counter:
     def __init__(self):
         self.i = 1
 

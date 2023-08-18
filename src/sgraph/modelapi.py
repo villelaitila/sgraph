@@ -91,10 +91,9 @@ class ModelApi:
                            prevent_self_deps):
         found = []
         for f in elements:
-            s = list()
-            s.append(f)
-            while len(s) > 0:
-                elem = s.pop()
+            stack = [f]
+            while len(stack) > 0:
+                elem = stack.pop()
                 if direction_is_out:
                     relations = elem.outgoing
                 else:
@@ -119,7 +118,7 @@ class ModelApi:
                             self.add_if_matches(ea, found, dep_filter)
 
                 for c in elem.children:
-                    s.append(c)
+                    stack.append(c)
         return found
 
     @functools.lru_cache(maxsize=None)
