@@ -175,7 +175,7 @@ class SGraph:
             return n
 
         def enc_xml_a_v(v):
-            if isinstance(v, collections.Mapping) or isinstance(v, int) or isinstance(v, float):
+            if isinstance(v, int) or isinstance(v, float):
                 v = str(v)
             elif isinstance(v, set):
                 v = ';'.join(sorted(v))
