@@ -56,9 +56,11 @@ def graph_to_cyto(g):
 
     graph = []
 
-    def convert_graph_elems(elem):
-        parent = elem.attrs.get('parent', '')
-        graph.append(node(elem.attrs['elem_id'], elem.attrs['label'], parent=parent))
+    def convert_graph_elems(elem_to_be_handled):
+        parent = elem_to_be_handled.attrs.get('parent', '')
+        graph.append(
+            node(elem_to_be_handled.attrs['elem_id'], elem_to_be_handled.attrs['label'],
+                 parent=parent))
 
     for elem in g.rootNode.children:
         elem.traverseElements(convert_graph_elems)
