@@ -41,16 +41,18 @@ def handle_nodegraphics(nodegraphics_data):
         if child.tag in NODE_TAGS:
             for label_or_style in child:
                 if label_or_style.tag == f'{Y_NS_IN_BRACES}NodeLabel':
-                    node_label += label_or_style.text.strip()
-                    if node_label.endswith('&#10;'):
-                        node_label.replace('&#10;', '')
-                    if 'backgroundColor' in label_or_style.attrib:
-                        style_attributes['style__background_color_for_label'] = \
-                            label_or_style.attrib['backgroundColor']
-                    if 'textColor' in label_or_style.attrib:
-                        style_attributes['style__text_color'] = label_or_style.attrib['textColor']
-                    if 'fontFamily' in label_or_style.attrib:
-                        style_attributes['style__font_family'] = label_or_style.attrib['fontFamily']
+                    if not ('modelName' in label_or_style.attrib and
+                            'corners' == label_or_style.attrib['modelName']):
+                        node_label += label_or_style.text.strip()
+                        if node_label.endswith('&#10;'):
+                            node_label.replace('&#10;', '')
+                        if 'backgroundColor' in label_or_style.attrib:
+                            style_attributes['style__background_color_for_label'] = \
+                                label_or_style.attrib['backgroundColor']
+                        if 'textColor' in label_or_style.attrib:
+                            style_attributes['style__text_color'] = label_or_style.attrib['textColor']
+                        if 'fontFamily' in label_or_style.attrib:
+                            style_attributes['style__font_family'] = label_or_style.attrib['fontFamily']
                 elif label_or_style.tag == f'{Y_NS_IN_BRACES}Fill':
                     if 'color' in label_or_style.attrib:
                         style_attributes['style__fill_color'] = label_or_style.attrib['color']
