@@ -1,6 +1,6 @@
 import difflib
 import sys
-from Levenshtein import StringMatcher
+import Levenshtein
 
 from sgraph.compare.comparegraphattrs import CompareGraphAttrs
 from sgraph import SElementAssociation
@@ -866,7 +866,7 @@ class ModelCompare:
 
         def name_points(name_a, name_b):
             # Compare name similarity
-            edit_distance = StringMatcher.distance(name_a, name_b)
+            edit_distance = Levenshtein.distance(name_a, name_b)
             if edit_distance < 1:
                 raise Exception('Invalid edit distance by stringmatcher')
 

@@ -13,6 +13,8 @@ Y_NS = 'http://www.yworks.com/xml/graphml'
 Y_NS_IN_BRACES = '{http://www.yworks.com/xml/graphml}'
 GD_NS_IN_BRACES = '{http://graphml.graphdrawing.org/xmlns}'
 XML_NS_IN_BRACES = '{{http://www.w3.org/XML/1998/namespace}'
+NODE_TAGS = [f'{Y_NS_IN_BRACES}ShapeNode', f'{Y_NS_IN_BRACES}GenericNode']
+SLASH_ENCODED = '__slash__'
 
 
 def handle_realizers(realizers):
@@ -28,48 +30,72 @@ def handle_realizers(realizers):
 
 
 def handle_nodegraphics(nodegraphics_data):
-    nodelabel = ''
+    style_attributes = {}
+    node_label = ''
     for child in nodegraphics_data:
         # print('   ' + child.tag)
-        for realizers_or_simple in child:
-            if realizers_or_simple.tag == f'{Y_NS_IN_BRACES}Realizers':
-                nodelabel += handle_realizers(realizers_or_simple)
-        if child.tag == f'{Y_NS_IN_BRACES}ShapeNode':
-            nodelabel += child.find(f'{Y_NS_IN_BRACES}NodeLabel').text.strip()
-            if nodelabel.endswith('&#10;'):
-                nodelabel.replace('&#10;', '')
-    if nodelabel:
-        return {'NodeLabel': nodelabel}
-    else:
-        return {}
+        # Realizer, Simple, etc.
+        for label_or_style in child:
+            if label_or_style.tag == f'{Y_NS_IN_BRACES}Realizers':
+                node_label += handle_realizers(label_or_style)
+        if child.tag in NODE_TAGS:
+            for label_or_style in child:
+                if label_or_style.tag == f'{Y_NS_IN_BRACES}NodeLabel':
+                    if not ('modelName' in label_or_style.attrib and
+                            'corners' == label_or_style.attrib['modelName']):
+                        node_label += label_or_style.text.strip()
+                        if node_label.endswith('&#10;'):
+                            node_label.replace('&#10;', '')
+                        if 'backgroundColor' in label_or_style.attrib:
+                            style_attributes['style__background_color_for_label'] = \
+                                label_or_style.attrib['backgroundColor']
+                        if 'textColor' in label_or_style.attrib:
+                            style_attributes['style__text_color'] = label_or_style.attrib['textColor']
+                        if 'fontFamily' in label_or_style.attrib:
+                            style_attributes['style__font_family'] = label_or_style.attrib['fontFamily']
+                elif label_or_style.tag == f'{Y_NS_IN_BRACES}Fill':
+                    if 'color' in label_or_style.attrib:
+                        style_attributes['style__fill_color'] = label_or_style.attrib['color']
+                elif label_or_style.tag == f'{Y_NS_IN_BRACES}BorderStyle':
+                    if 'color' in label_or_style.attrib:
+                        style_attributes['style__border_color'] = label_or_style.attrib['color']
+                elif label_or_style.tag == f'{Y_NS_IN_BRACES}Shape':
+                    if 'type' in label_or_style.attrib:
+                        style_attributes['style__shape_type'] = label_or_style.attrib['type']
+
+    return node_label, style_attributes
 
 
 def handle_node(node: Element, parent_elem: SElement, node_id_to_element, graphml_keys, recursion):
     attrs = {}
-    out_from_nodegraphics = {}
-    for data in node.findall(f'{GD_NS_IN_BRACES}data'):
-        if data.attrib['key'] in graphml_keys:
-            key_content = graphml_keys[data.attrib['key']]
-            if 'attr.name' in key_content:
-                attr_name = key_content['attr.name']
-                if f'{XML_NS_IN_BRACES}space' in data.attrib:
-                    # preserve? = data.attrib[f'{XML_NS_IN_BRACES}space']
-                    pass
+    node_label = ''
+    for input_data in node.findall(f'{GD_NS_IN_BRACES}data'):
+        if input_data.attrib['key'] in graphml_keys:
 
-                attrs[attr_name] = data.text
+            field_spec = graphml_keys[input_data.attrib['key']]
+            if 'attr.name' in field_spec and field_spec['for'] == 'node' and input_data.text:
+                if input_data.text.strip():
+                    attr_name = field_spec['attr.name']
+                    if f'{XML_NS_IN_BRACES}space' in input_data.attrib:
+                        # preserve? = data.attrib[f'{XML_NS_IN_BRACES}space']
+                        pass
+
+                    attrs[attr_name] = input_data.text.strip()
             else:
-                if 'yfiles.type' in key_content and key_content['yfiles.type'] == 'nodegraphics':
-                    out_from_nodegraphics = handle_nodegraphics(data)
+                if 'yfiles.type' in field_spec and field_spec['yfiles.type'] == 'nodegraphics':
+                    node_label, style_attributes = handle_nodegraphics(input_data)
+                    if style_attributes:
+                        attrs.update(style_attributes)
 
-    if out_from_nodegraphics:
-        elem_id = out_from_nodegraphics['NodeLabel']
+    if node_label:
+        elem_id = node_label
     else:
         elem_id = ''
 
     # print('  ' * recursion, elem_id, attrs)
 
     if elem_id == '':
-        sys.stderr.write('Cannot handle node ' + elem_id)
+        sys.stderr.write('Cannot handle node ' + elem_id + ' under ' + parent_elem.getPath())
         return
 
     # Prevent slash character in node label to cause sub elements in sgraph side.
@@ -101,19 +127,35 @@ def handle_edge(node, node_id_to_element, graphml_keys):
         return
 
     dep_type = ''
-
+    attrs = {}
     for edge_data in node:
-        # if edge_data.getAttribute('key') == 'd10'
-        for child in edge_data:
-            if child.tag == 'y:EdgeLabel':
-                s = ''
-                for c in child:
-                    s += c.content
-                dep_type = s
-                break
+        field_spec = graphml_keys[edge_data.attrib['key']]
+        if field_spec['for'] == 'edge':
+            if 'attr.name' in field_spec and field_spec['attr.type'] == 'string':
+                if edge_data.text and edge_data.text.strip():
+                    attrs[field_spec['attr.name'].lower()] = edge_data.text.strip()
+            elif 'yfiles.type' in field_spec and field_spec['yfiles.type'] == 'edgegraphics':
+                for edge_elem in edge_data:
+                    for edge_detail in edge_elem:
+                        if edge_detail.tag == f'{Y_NS_IN_BRACES}EdgeLabel':
+                            if edge_detail.text:
+                                dep_type = edge_detail.text.strip()
+                            if 'textColor' in edge_detail.attrib:
+                                attrs['style__text_color'] = edge_detail.attrib['textColor']
+                        elif edge_detail.tag == f'{Y_NS_IN_BRACES}LineStyle':
+                            if 'color' in edge_detail.attrib:
+                                attrs['style__color'] = edge_detail.attrib['color']
+                            elif 'line_type' in edge_detail.attrib:
+                                attrs['style__line_type'] = edge_detail.attrib['line_type']
+                            elif 'width' in edge_detail.attrib:
+                                attrs['style__width'] = edge_detail.attrib['width']
+                        elif edge_detail.tag == f'{Y_NS_IN_BRACES}Arrows':
+                            if 'source' in edge_detail.attrib:
+                                attrs['style__source_arrow'] = edge_detail.attrib['source']
+                            if 'target' in edge_detail.attrib:
+                                attrs['style__target_arrow'] = edge_detail.attrib['target']
 
-    node_attrs = {}  # {'graphml_edge_id': edge_id}
-    association = SElementAssociation(source_elem, target_elem, dep_type, node_attrs)
+    association = SElementAssociation(source_elem, target_elem, dep_type, attrs)
     association.initElems()
     return association
 
@@ -133,16 +175,21 @@ def handle_graph(input_graph, graphml_keys, node_id_to_element, parent_elem, rec
 
 
 def handle_main_level_graph(input_graph, graphml_keys, node_id_to_element, parent_elem,
-                            recursion=0):
-    attrs = {}
+                            output_graph, recursion=0):
     # for b in input_graph:
     #    print('  '*recursion, b.tag, b.attrib)
     for input_data in input_graph.findall(f'{GD_NS_IN_BRACES}data'):
         if input_data.attrib['key'] in graphml_keys:
-            attr_name = graphml_keys[input_data.attrib['key']]['attr.name']
-            if f'{XML_NS_IN_BRACES}space' in input_data.attrib:
-                attrs[attr_name] = input_data.attrib[f'{XML_NS_IN_BRACES}space']
-                # TODO Parse from node data?
+            key_id = input_data.attrib['key']
+            field_spec = graphml_keys[key_id]
+            if field_spec['attr.type'] == 'string':
+                if field_spec['for'] == 'graph':
+                    if input_data.text and input_data.text.strip():
+                        output_graph.modelAttrs[
+                            field_spec['attr.name'].lower()] = input_data.text.strip()
+                elif field_spec['for'] == 'node':
+                    if input_data.text and input_data.text.strip():
+                        parent_elem.attrs[field_spec['attr.name'].lower()] = input_data.text.strip()
 
     for node in input_graph.findall(f'{GD_NS_IN_BRACES}node'):
         handle_node(node, parent_elem, node_id_to_element, graphml_keys, recursion)
@@ -179,7 +226,8 @@ def graphml_to_sgraph(graphml_data):
 
     node_id_to_element = {}
     for input_graph in graphml_elem.findall(f'{GD_NS_IN_BRACES}graph'):
-        handle_main_level_graph(input_graph, graphml_keys, node_id_to_element, output_root)
+        handle_main_level_graph(input_graph, graphml_keys, node_id_to_element, output_root,
+                                output_graph)
 
     return output_graph
 
@@ -189,12 +237,36 @@ def generate_dom_for_edge(assoc: SElementAssociation, parent, element_to_id_map,
     edge.set('source', element_to_id_map[assoc.fromElement])
     edge.set('target', element_to_id_map[assoc.toElement])
     edge.set('id', edge_id)
-    if 'description' in assoc.attrs:
-        etree.SubElement(edge, 'data', {'key': 'd9'}).text = assoc.attrs['description']
+
+    attrs = assoc.attrs
+
+    if 'url' in attrs:
+        etree.SubElement(edge, 'data', {'key': 'd8'}).text = attrs['url']
+    if 'description' in attrs:
+        etree.SubElement(edge, 'data', {'key': 'd9'}).text = attrs['description']
+
     if assoc.deptype:
         d10 = etree.SubElement(edge, 'data', {'key': 'd10'})
         poly_line_edge = etree.SubElement(d10, f'{Y_NS_IN_BRACES}PolyLineEdge')
-        etree.SubElement(poly_line_edge, f'{Y_NS_IN_BRACES}EdgeLabel').text = assoc.deptype
+        line_color = attrs.get('style__color', '#000000')
+        line_type = attrs.get('style__line_type', 'line')
+        line_width = attrs.get('style__width', '1.0')
+        source_arrow = attrs.get('style__source_arrow', 'none')
+        target_arrow = attrs.get('style__target_arrow', 'standard')
+        text_color = attrs.get('style__text_color', '#000000')
+
+        etree.SubElement(poly_line_edge, f'{Y_NS_IN_BRACES}LineStyle', {
+            'color': line_color,
+            'line_type': line_type,
+            'width': line_width
+        })
+        etree.SubElement(poly_line_edge, f'{Y_NS_IN_BRACES}Arrows', {
+            'source': source_arrow,
+            'target': target_arrow
+        })
+        etree.SubElement(poly_line_edge, f'{Y_NS_IN_BRACES}EdgeLabel', {
+            'textColor': text_color
+        }).text = assoc.deptype
 
     return edge
 
@@ -211,53 +283,51 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
     bg_color = e.attrs.get('style__background_color_for_label', '#EBEBEB')
     border_color = e.attrs.get('style__border_color', '#000000')
     text_color = e.attrs.get('style__text_color', '#000000')
+    shape_type = e.attrs.get('style__shape_type', 'roundrectangle')
+    font_family = e.attrs.get('style__font_family', 'Dialog')
 
+    if 'url' in e.attrs:
+        etree.SubElement(elem_dom, 'data', {'key': 'd4'}).text = e.attrs['url'].strip()
     if 'description' in e.attrs:
         etree.SubElement(elem_dom, 'data', {'key': 'd5'}).text = e.attrs['description'].strip()
 
     if e.children:
         id_counter[e] = 0
-        if e.name:
-            d10 = etree.SubElement(elem_dom, 'data', {'key': 'd6'})
-            realizers = etree.SubElement(
-                etree.SubElement(d10, f'{Y_NS_IN_BRACES}ProxyAutoBoundsNode'),
-                f'{Y_NS_IN_BRACES}Realizers')
-            realizers.set('active', '0')
-            group = etree.SubElement(realizers, f'{Y_NS_IN_BRACES}GroupNode')
-            etree.SubElement(
-                group, f'{Y_NS_IN_BRACES}NodeLabel', {
-                    'alignment': 'right',
-                    'autoSizePolicy': 'node_width',
-                    'backgroundColor': bg_color,
-                    'borderDistance': "0.0",
-                    'fontFamily': "Dialog",
-                    'fontSize': "15",
-                    'fontStyle': "plain",
-                    'hasLineColor': "false",
-                    'height': "21.4609375",
-                    'horizontalTextPosition': "center",
-                    'iconTextGap': "4",
-                    'modelName': "internal",
-                    'modelPosition': "t",
-                    'textColor': text_color,
-                    'verticalTextPosition': "bottom",
-                    'visible': "true",
-                    'width': "273.0",
-                    'x': "0.0",
-                    'y': '0.0'
-                }).text = e.name
-            etree.SubElement(group, f'{{{Y_NS}}}Shape', {'type': 'roundrectangle'})
-            etree.SubElement(group, f'{{{Y_NS}}}Fill', {
-                'color': fill_color,
-                'transparent': 'false'
-            })
-            etree.SubElement(group, f'{{{Y_NS}}}BorderStyle', {
-                'color': border_color,
-                'type': 'line',
-                'width': '1.0'
-            })
-            etree.SubElement(group, f'{{{Y_NS}}}State', {'closed': 'false'})
-            etree.SubElement(realizers, f'{{{Y_NS}}}GroupNode')
+        d10 = etree.SubElement(elem_dom, 'data', {'key': 'd6'})
+        realizers = etree.SubElement(etree.SubElement(d10, f'{Y_NS_IN_BRACES}ProxyAutoBoundsNode'),
+                                     f'{Y_NS_IN_BRACES}Realizers')
+        realizers.set('active', '0')
+        node = etree.SubElement(realizers, f'{Y_NS_IN_BRACES}GroupNode')
+        etree.SubElement(
+            node, f'{Y_NS_IN_BRACES}NodeLabel', {
+                'alignment': 'right',
+                'autoSizePolicy': 'node_width',
+                'backgroundColor': bg_color,
+                'borderDistance': "0.0",
+                'fontFamily': font_family,
+                'fontSize': "14",
+                'fontStyle': "plain",
+                'hasLineColor': "false",
+                'height': "21.4609375",
+                'horizontalTextPosition': "center",
+                'iconTextGap': "4",
+                'modelName': "internal",
+                'modelPosition': "t",
+                'textColor': text_color,
+                'verticalTextPosition': "bottom",
+                'visible': "true",
+                'width': "273.0",
+                'x': "0.0",
+                'y': '0.0'
+            }).text = e.name.replace(SLASH_ENCODED, '/')
+        etree.SubElement(node, f'{{{Y_NS}}}Fill', {'color': fill_color, 'transparent': 'false'})
+        etree.SubElement(node, f'{{{Y_NS}}}BorderStyle', {
+            'color': border_color,
+            'type': 'line',
+            'width': '1.0'
+        })
+        etree.SubElement(node, f'{{{Y_NS}}}State', {'closed': 'false'})
+        etree.SubElement(realizers, f'{{{Y_NS}}}GroupNode')
 
         graph = etree.SubElement(elem_dom, 'graph')
         graph.set('edgedefault', 'directed')
@@ -269,34 +339,38 @@ def generate_dom_for_element(e: SElement, id_counter: Dict[SElement, int], curre
             generate_dom_for_element(child, id_counter, child_node_id, graph, element_to_id_map)
             id_counter[e] += 1
     else:
-        if e.name:
-            d10 = etree.SubElement(elem_dom, 'data', {'key': 'd6'})
-            shape_node = etree.SubElement(d10, f'{{{Y_NS}}}ShapeNode')
-            etree.SubElement(shape_node, f'{{{Y_NS}}}Geometry', {'height': '30.0', 'width': '213'})
-            etree.SubElement(shape_node, f'{{{Y_NS}}}Fill', {'color': fill_color})
-            etree.SubElement(shape_node, f'{{{Y_NS}}}BorderStyle', {
-                'hasColor': 'false',
-                'raised': 'false',
-                'type': 'line',
-                'width': '1.0'
-            })
-            l_attrs = {
-                'alignment': "center",
-                'autoSizePolicy': "content",
-                'fontFamily': "Dialog",
-                'fontSize': "12",
-                'fontStyle': "plain",
-                'hasBackgroundColor': "false",
-                'hasLineColor': "false",
-                'height': "17.96875",
-                'horizontalTextPosition': "center",
-                'iconTextGap': "4",
-                'modelName': "custom",
-                'textColor': text_color,
-                'verticalTextPosition': 'bottom',
-                'visible': "true"
-            }
-            etree.SubElement(shape_node, f'{{{Y_NS}}}NodeLabel', l_attrs).text = e.name
+        d10 = etree.SubElement(elem_dom, 'data', {'key': 'd6'})
+        node = etree.SubElement(d10, f'{{{Y_NS}}}ShapeNode')
+        etree.SubElement(node, f'{{{Y_NS}}}Geometry', {'height': '30.0', 'width': '30.0'})
+        etree.SubElement(node, f'{{{Y_NS}}}Fill', {'color': fill_color, 'transparent': 'false'})
+
+        #             'hasColor': 'false'
+        etree.SubElement(node, f'{{{Y_NS}}}BorderStyle', {
+            'color': border_color,
+            'raised': 'false',
+            'type': 'line',
+            'width': '1.0'
+        })
+        l_attrs = {
+            'alignment': "center",
+            'autoSizePolicy': "content",
+            'fontFamily': font_family,
+            'fontSize': "12",
+            'fontStyle': "plain",
+            'hasBackgroundColor': "false",
+            'hasLineColor': "false",
+            'height': "17.96875",
+            'horizontalTextPosition': "center",
+            'iconTextGap': "4",
+            'modelName': "custom",
+            'textColor': text_color,
+            'verticalTextPosition': 'bottom',
+            'visible': "true"
+        }
+        etree.SubElement(node, f'{{{Y_NS}}}NodeLabel', l_attrs).text = e.name.replace(
+            SLASH_ENCODED, '/')
+
+    etree.SubElement(node, f'{{{Y_NS}}}Shape', {'type': shape_type})
 
 
 # noinspection PyPep8Naming

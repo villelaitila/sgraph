@@ -1,8 +1,9 @@
 import sys
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from sgraph.exceptions import SElementMergedException
 from sgraph.selementassociation import SElementAssociation
+
 
 DEBUG = False
 
@@ -21,9 +22,9 @@ class SElement:
         if self == parent:
             raise Exception('Self loop in model\n')
 
-        self.name = name
-        self.human_readable_name = ''
-        self.parent = None  # type: Optional[SElement]
+        self.name: str = name
+        self.human_readable_name: str = ''
+        self.parent: Optional[SElement] = None
         if parent is not None:
             self.parent = parent
             if self.name not in self.parent.childrenDict:
@@ -43,11 +44,11 @@ class SElement:
         else:
             self.parent = None
 
-        self.children = []
-        self.childrenDict = {}
-        self.outgoing = []
-        self.incoming = []
-        self.attrs = {}
+        self.children: List[SElement] = []
+        self.childrenDict: Dict[str, SElement] = {}
+        self.outgoing: List[SElementAssociation] = []
+        self.incoming: List[SElementAssociation] = []
+        self.attrs: Dict = {}
         # self.num = '0'
 
     def addChild(self, child: 'SElement'):
@@ -178,19 +179,20 @@ class SElement:
             if self.parent is not None:
                 self.parent.detachChild(self)
 
-        for ea in self.outgoing:
-            ea.toElement.incoming.remove(ea)
-        self.outgoing = []
+        for ea in list(self.outgoing):
+            ea.remove()
 
-        for ea in self.incoming:
-            ea.fromElement.outgoing.remove(ea)
+        self.outgoing.clear()
 
-        self.incoming = []
+        for ea in list(self.incoming):
+            ea.remove()
+
+        self.incoming.clear()
 
         for c in self.children:
             c.remove(True)
-        self.children = []
-        self.childrenDict = {}
+        self.children.clear()
+        self.childrenDict.clear()
 
     def update_children_dict(self):
         self.childrenDict.clear()
@@ -480,6 +482,8 @@ class SElement:
     def merge(self, other, ignore_type=False, ignore_attrs=False):
         """
         Merge self with other, leaving other to irrelevancy.
+        :param ignore_attrs: If True, ignore attributes
+        :param ignore_type: If True, ignore type
         :param other: SElement to be merged into self
         :return:
         """

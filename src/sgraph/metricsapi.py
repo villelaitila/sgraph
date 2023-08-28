@@ -1,5 +1,5 @@
-from sgraph.attributes import attributequeries
 from sgraph import SGraph
+from sgraph.attributes import attributequeries
 
 
 class MetricsApi:

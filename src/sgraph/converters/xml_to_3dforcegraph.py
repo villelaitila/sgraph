@@ -18,7 +18,7 @@ else:
 elem_to_id_map = {}
 
 
-class Counter():
+class Counter:
     def __init__(self):
         self.i = 1
 
