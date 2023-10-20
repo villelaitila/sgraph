@@ -279,7 +279,7 @@ class SGraph:
 
     def to_deps(self, fname):
         if fname is not None:
-            f = open(fname, 'w')
+            f = open(fname, 'w', encoding='utf-8')
         else:
             f = sys.stdout
         withDependencies = True
@@ -871,7 +871,7 @@ class SGraph:
 
     def to_plantuml(self, fname):
         if fname is not None:
-            f = open(fname, 'w')
+            f = open(fname, 'w', encoding='utf-8')
         else:
             f = sys.stdout
 
