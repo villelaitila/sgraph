@@ -179,13 +179,13 @@ class SElement:
             if self.parent is not None:
                 self.parent.detachChild(self)
 
-        for ea in list(self.outgoing):
-            ea.remove()
+        for association in list(self.outgoing):
+            association.remove()
 
         self.outgoing.clear()
 
-        for ea in list(self.incoming):
-            ea.remove()
+        for association in list(self.incoming):
+            association.remove()
 
         self.incoming.clear()
 
@@ -216,18 +216,18 @@ class SElement:
 
     def getEATypes(self, theSet):
 
-        for ea in self.outgoing:
-            theSet.add(ea.deptype)
+        for association in self.outgoing:
+            theSet.add(association.deptype)
 
         for x in self.children:
             x.getEATypes(theSet)
 
     def getEATypeCounts(self, d: Dict[str, int]):
-        for ea in self.outgoing:
-            if ea.deptype not in d:
-                d[ea.deptype] = 1
+        for association in self.outgoing:
+            if association.deptype not in d:
+                d[association.deptype] = 1
             else:
-                d[ea.deptype] += 1
+                d[association.deptype] += 1
 
         for x in self.children:
             x.getEATypeCounts(d)
@@ -494,40 +494,40 @@ class SElement:
             self.addChild(c)
 
         current_deps = {}
-        for ea in self.outgoing:
-            current_deps.setdefault(ea.toElement, []).append(ea.deptype)
+        for association in self.outgoing:
+            current_deps.setdefault(association.toElement, []).append(association.deptype)
 
         # TODO This could be faster if assocs would be recycled instead of throw away + create new
 
-        for ea in list(other.outgoing):
-            if ea.toElement in current_deps and ea.deptype in current_deps[
-                    ea.toElement]:
+        for association in list(other.outgoing):
+            if association.toElement in current_deps and association.deptype in current_deps[
+                    association.toElement]:
                 # already exists
                 pass
-            elif self != ea.toElement:
-                newEa = SElementAssociation(self, ea.toElement, ea.deptype,
-                                            ea.attrs)
+            elif self != association.toElement:
+                newEa = SElementAssociation(self, association.toElement, association.deptype,
+                                            association.attrs)
                 newEa.initElems()
 
-        for ea in list(other.outgoing):
-            ea.remove()
+        for association in list(other.outgoing):
+            association.remove()
 
         current_deps = {}
-        for ea in self.incoming:
-            current_deps.setdefault(ea.fromElement, []).append(ea.deptype)
+        for association in self.incoming:
+            current_deps.setdefault(association.fromElement, []).append(association.deptype)
 
-        for ea in list(other.incoming):
-            if ea.fromElement in current_deps and ea.deptype in current_deps[
-                    ea.fromElement]:
+        for association in list(other.incoming):
+            if association.fromElement in current_deps and association.deptype in current_deps[
+                    association.fromElement]:
                 # already exists
                 pass
-            elif ea.fromElement != self:
-                newEa = SElementAssociation(ea.fromElement, self, ea.deptype,
-                                            ea.attrs)
+            elif association.fromElement != self:
+                newEa = SElementAssociation(association.fromElement, self, association.deptype,
+                                            association.attrs)
                 newEa.initElems()
 
-        for ea in list(other.incoming):
-            ea.remove()
+        for association in list(other.incoming):
+            association.remove()
 
         for k, v in other.attrs.items():
             if not ignore_attrs and k != 'type':
@@ -628,11 +628,11 @@ class SElement:
         if self.outgoing:
             ea_hashes = set()
             dupes = []
-            for ea in self.outgoing:
-                num = ea.getHashNum()
+            for association in self.outgoing:
+                num = association.getHashNum()
                 c = num
                 if c in ea_hashes:
-                    dupes.append(ea)
+                    dupes.append(association)
                 else:
                     ea_hashes.add(c)
             """
@@ -641,8 +641,8 @@ class SElement:
                 print('Removing dupe: ' + str(d))
                 d.remove()
             if dupes:
-                for ea in self.outgoing:
-                    print('Preserving: ' + str(ea))
+                for association in self.outgoing:
+                    print('Preserving: ' + str(association))
                 print('\n\n')
             """
 

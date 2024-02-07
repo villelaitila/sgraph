@@ -21,14 +21,14 @@ class SGraphAnalysis:
             while len(superclasses) > 0:
                 superclass = superclasses.pop(0)
                 handled.add(superclass)
-                for ea in superclass.incoming:
-                    if ea.deptype == 'inherits' or ea.deptype == 'implements':
-                        if ea.fromElement in handled:
+                for association in superclass.incoming:
+                    if association.deptype == 'inherits' or association.deptype == 'implements':
+                        if association.fromElement in handled:
                             # Prevent endless loop (if the code has uncompilable inheritance cycle)
                             continue
 
-                        superclasses.append(ea.fromElement)
-                        o = ea.fromElement.getChildByName(memberF.name)
+                        superclasses.append(association.fromElement)
+                        o = association.fromElement.getChildByName(memberF.name)
                         if o is not None:
                             overwritten.append(o)
 
@@ -77,23 +77,23 @@ class SGraphAnalysis:
 
     def merge_with_parent(self, child, parent):
         if not child.children:
-            for ea in child.outgoing:
-                ea.fromElement = parent
-                parent.outgoing.append(ea)
-            for ea in child.incoming:
-                ea.toElement = parent
-                parent.incoming.append(ea)
+            for association in child.outgoing:
+                association.fromElement = parent
+                parent.outgoing.append(association)
+            for association in child.incoming:
+                association.toElement = parent
+                parent.incoming.append(association)
             parent.children.remove(child)
             parent.update_children_dict()
         else:
             for childschild in list(child.children):
                 self.merge_with_parent(childschild, child)
-            for ea in child.outgoing:
-                ea.fromElement = parent
-                parent.outgoing.append(ea)
-            for ea in child.incoming:
-                ea.toElement = parent
-                parent.incoming.append(ea)
+            for association in child.outgoing:
+                association.fromElement = parent
+                parent.outgoing.append(association)
+            for association in child.incoming:
+                association.toElement = parent
+                parent.incoming.append(association)
             parent.children.remove(child)
             parent.update_children_dict()
 

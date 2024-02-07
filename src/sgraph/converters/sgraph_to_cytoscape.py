@@ -48,8 +48,8 @@ def graph_to_cyto(g):
         if elem.parent is not None and elem.parent.parent is not None:
             elem.attrs['parent'] = str(elem.parent.attrs['elem_id'])
         elem.attrs['label'] = elem.name
-        # for ea in elem.outgoing:
-        #    ea.attrs['edge_id'] = 'e' + str(edgecounter.next())
+        # for association in elem.outgoing:
+        #    association.attrs['edge_id'] = 'e' + str(edgecounter.next())
 
     for elem in g.rootNode.children:
         elem.traverseElements(mark_ids)
@@ -66,9 +66,9 @@ def graph_to_cyto(g):
         elem.traverseElements(convert_graph_elems)
 
     def convert_graph_assocs(elem):
-        for ea in elem.outgoing:
-            source_id = ea.fromElement.attrs['elem_id']
-            target_id = ea.toElement.attrs['elem_id']
+        for association in elem.outgoing:
+            source_id = association.fromElement.attrs['elem_id']
+            target_id = association.toElement.attrs['elem_id']
             graph.append(edge(edgecounter, source_id, target_id))
 
     for elem in g.rootNode.children:

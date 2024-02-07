@@ -1,6 +1,5 @@
 import json
-import sys
-import os
+
 from sgraph import SGraph
 
 
@@ -8,14 +7,16 @@ def sgraph_element_to_dict(element):
     output = {'name': element.name, 'attrs': element.attrs}
     if element.outgoing:
         output['outbound'] = []
-        for ea in element.outgoing:
-            output['outbound'].append({'used': ea.toElement.getPath(), 'deptype': ea.deptype,
-                                       'attrs': ea.attrs})
+        for association in element.outgoing:
+            output['outbound'].append({'used': association.toElement.getPath(),
+                                       'deptype': association.deptype,
+                                       'attrs': association.attrs})
     if element.incoming:
         output['inbound'] = []
-        for ea in element.outgoing:
-            output['inbound'].append({'used': ea.fromElement.getPath(), 'deptype': ea.deptype,
-                                      'attrs': ea.attrs})
+        for association in element.outgoing:
+            output['inbound'].append({'used': association.fromElement.getPath(),
+                                      'deptype': association.deptype,
+                                      'attrs': association.attrs})
     output['elements'] = {}
     for child in element.children:
         output['elements'][child.name] = sgraph_element_to_dict(child)

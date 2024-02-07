@@ -9,13 +9,12 @@ Example how to use this to parse and handle model files with this tool.
  print 'Nodes',egm.rootNode.getNodeCount()
 
 """
+import codecs
 import io
 import os
+import sys
 import uuid
 import xml.sax.handler
-import sys
-import collections
-import codecs
 import zipfile
 from typing import Optional
 
@@ -229,12 +228,13 @@ class SGraph:
                 groups = SGraph.groupea(c.outgoing)
                 for ealist, deptype, ea_attrs in groups:
                     elem_numbers = []
-                    for ea in ealist:
-                        if ea.toElement in elem_to_num:
-                            elem_numbers.append(elem_to_num[ea.toElement])
+                    for association in ealist:
+                        if association.toElement in elem_to_num:
+                            elem_numbers.append(elem_to_num[association.toElement])
                         else:
-                            sys.stderr.write(f'No numeric id for {ea.toElement.getPath()} dep '
-                                             f'from {ea.fromElement.name}\n')
+                            sys.stderr.write(f'No numeric id for '
+                                             f'{association.toElement.getPath()} dep '
+                                             f'from {association.fromElement.name}\n')
                     idrefs = ','.join(sorted(set(elem_numbers)))
                     if idrefs:
                         # idrefs = ','.join(map(lambda x: str(x.toElement.num), g))
@@ -693,13 +693,13 @@ class SGraph:
                 stack = [self.rootNode]
                 while stack:
                     elem = stack.pop(0)
-                    for ea in elem.outgoing:
-                        if ea.toElement in self.id_to_elem_map:
-                            ea.toElement = self.id_to_elem_map[ea.toElement]
-                            ea.toElement.incoming.append(ea)
+                    for association in elem.outgoing:
+                        if association.toElement in self.id_to_elem_map:
+                            association.toElement = self.id_to_elem_map[association.toElement]
+                            association.toElement.incoming.append(association)
                         else:
-                            sys.stderr.write(f'Error: unknown id {ea.toElement} n={elem.name}\n')
-                            raise Exception(f'Error: unknown id in input data: {ea.toElement}')
+                            sys.stderr.write(f'Error: unknown id {association.toElement} n={elem.name}\n')
+                            raise Exception(f'Error: unknown id in input data: {association.toElement}')
 
                     for child in elem.children:
                         stack.append(child)
@@ -854,15 +854,15 @@ class SGraph:
     def groupea(eas):
         tuples = []
         easmap = {}
-        for ea in eas:
-            if ea.deptype is not None:
-                k = str(ea.attrs) + ea.deptype
+        for association in eas:
+            if association.deptype is not None:
+                k = str(association.attrs) + association.deptype
             else:
-                k = str(ea.attrs)
+                k = str(association.attrs)
             if k in easmap:
-                easmap[k].append(ea)
+                easmap[k].append(association)
             else:
-                easmap[k] = [ea]
+                easmap[k] = [association]
 
         for k, v in list(easmap.items()):
             tuples.append((v, v[0].deptype, v[0].attrs))
@@ -977,17 +977,17 @@ class SGraph:
         def visit(a, elem_of_primary_model, elem_of_secondary_model):
             outgoing = list(a.outgoing)
             if elem_of_primary_model:
-                for ea in elem_of_primary_model.outgoing:
-                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(ea, outgoing)
+                for association in elem_of_primary_model.outgoing:
+                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(association, outgoing)
                     if corresponding_ea:
                         outgoing.remove(corresponding_ea)
-                        corresponding_ea.attrs.update(ea.attrs)
+                        corresponding_ea.attrs.update(association.attrs)
             if elem_of_secondary_model:
-                for ea in elem_of_secondary_model.outgoing:
-                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(ea, outgoing)
+                for association in elem_of_secondary_model.outgoing:
+                    corresponding_ea = SElementAssociation.match_ea_from_other_sgraph(association, outgoing)
                     if corresponding_ea:
                         outgoing.remove(corresponding_ea)
-                        corresponding_ea.attrs.update(ea.attrs)
+                        corresponding_ea.attrs.update(association.attrs)
 
         SGraph.recurse_three_models(self.rootNode, primary_model.rootNode, secondary_model.rootNode,
                                     visit)

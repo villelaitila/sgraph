@@ -21,14 +21,14 @@ class SGraphFiltering:
             :return:
             """
             remove_eas = []
-            for ea in elem.outgoing:
+            for association in elem.outgoing:
                 matched = False
                 for d in dep_types_to_remove:
-                    if ea.deptype == d:
+                    if association.deptype == d:
                         matched = True
                         break
                 if matched:
-                    remove_eas.append(ea)
+                    remove_eas.append(association)
 
             for c in elem.children:
                 remove(c)
@@ -44,20 +44,20 @@ class SGraphFiltering:
         """
         e1 = model.getElementFromPath(from_path)
         e2 = model.getElementFromPath(to_path)
-        remove_eas_list = []
+        remove_assocs_list = []
 
         def remove_eas(elem):
-            for ea in elem.outgoing:
+            for association in elem.outgoing:
 
-                if ea.toElement == e2 or ea.toElement.isDescendantOf(e2):
-                    remove_eas_list.append(ea)
+                if association.toElement == e2 or association.toElement.isDescendantOf(e2):
+                    remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
         if e1 is not None:
             remove_eas(e1)
-            for r in remove_eas_list:
+            for r in remove_assocs_list:
                 r.remove()
 
     @staticmethod
@@ -71,20 +71,20 @@ class SGraphFiltering:
         if from_elem is None:
             return
 
-        remove_eas_list = []
+        remove_assocs_list = []
 
         def remove_eas(elem):
-            for ea in elem.outgoing:
+            for association in elem.outgoing:
 
-                if ea.toElement != from_elem or ea.toElement.isDescendantOf(from_elem):
-                    remove_eas_list.append(ea)
+                if association.toElement != from_elem or association.toElement.isDescendantOf(from_elem):
+                    remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
         if from_elem is not None:
             remove_eas(from_elem)
-            for r in remove_eas_list:
+            for r in remove_assocs_list:
                 r.remove()
 
     @staticmethod
@@ -98,18 +98,18 @@ class SGraphFiltering:
         if to_elem is None:
             return
 
-        remove_eas_list = []
+        remove_assocs_list = []
 
         def remove_eas(elem):
-            for ea in elem.incoming:
-
-                if ea.fromElement != to_elem or ea.fromElement.isDescendantOf(to_elem):
-                    remove_eas_list.append(ea)
+            for association in elem.incoming:
+                if (association.fromElement != to_elem or
+                        association.fromElement.isDescendantOf(to_elem)):
+                    remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
         if to_elem is not None:
             remove_eas(to_elem)
-            for r in remove_eas_list:
+            for r in remove_assocs_list:
                 r.remove()
