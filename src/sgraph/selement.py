@@ -4,7 +4,6 @@ from typing import Optional, Dict, List
 from sgraph.exceptions import SElementMergedException
 from sgraph.selementassociation import SElementAssociation
 
-
 DEBUG = False
 
 
@@ -32,11 +31,10 @@ class SElement:
                 self.parent.childrenDict[self.name] = self
             else:
                 if DEBUG:
-                    raise Exception(
-                        'Error: overlapping elements related to {} under {}, types: '
-                        '{} and {}'.format(
-                            self.name, self.parent.getPath(), '<not known>',
-                            self.parent.childrenDict[self.name].getType()))
+                    raise Exception('Error: overlapping elements related to {} under {}, types: '
+                                    '{} and {}'.format(
+                                        self.name, self.parent.getPath(), '<not known>',
+                                        self.parent.childrenDict[self.name].getType()))
                 else:
                     raise SElementMergedException(
                         'Element {} tried to be merged with an existing element '
@@ -65,11 +63,9 @@ class SElement:
             self.childrenDict[child.name] = child
         else:
             if DEBUG:
-                raise Exception(
-                    'Error: overlapping elements related to {} under {}, types: {} '
-                    'and {}'.format(child.name, self.getPath(),
-                                    child.getType(),
-                                    self.childrenDict[child.name].getType()))
+                raise Exception('Error: overlapping elements related to {} under {}, types: {} '
+                                'and {}'.format(child.name, self.getPath(), child.getType(),
+                                                self.childrenDict[child.name].getType()))
             else:
                 self.childrenDict[child.name].merge(child)
                 return self.childrenDict[child.name]
@@ -170,9 +166,8 @@ class SElement:
         if elem.name in self.childrenDict:
             self.childrenDict.pop(elem.name)
         else:
-            sys.stderr.write(
-                'Error: Probably duplicated element {} under {}'.format(
-                    elem.name, self.getPath()))
+            sys.stderr.write('Error: Probably duplicated element {} under {}'.format(
+                elem.name, self.getPath()))
 
     def remove(self, leaveParentUntouched=False):
         if not leaveParentUntouched:
@@ -252,18 +247,13 @@ class SElement:
                 #        out.append(c)
         elif current_level < level:
             for c in self.children:
-                out += c.getElementsByNameOnLevel(name, level,
-                                                  current_level + 1)
+                out += c.getElementsByNameOnLevel(name, level, current_level + 1)
         return out
 
-    def recurseIncomingDependencies(self,
-                                    elemlist,
-                                    assoclist,
-                                    outside_level=0):
+    def recurseIncomingDependencies(self, elemlist, assoclist, outside_level=0):
         for c in self.incoming:
             if outside_level == 0 or c.fromElement.getAncestorOfLevel(
-                    outside_level) != c.toElement.getAncestorOfLevel(
-                        outside_level):
+                    outside_level) != c.toElement.getAncestorOfLevel(outside_level):
                 elemlist.append(c.fromElement)
                 if assoclist is not None:
                     assoclist.append(c)
@@ -465,15 +455,15 @@ class SElement:
                     print('Problem with element parent self ref..')
                     print(self.getPath())
                     print(c.parent.getPath())
-                    raise Exception('Error: broken model related to elem ' +
-                                    c.name + ' under ' + c.parent.name + '\n')
+                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
+                                    c.parent.name + '\n')
 
                 if c in elems:
                     print('Problem with element path')
                     print(c.parent.parent.getPath())
                     print(len(self.children))
-                    raise Exception('Error: broken model related to elem ' +
-                                    c.name + ' under ' + c.parent.name + '\n')
+                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
+                                    c.parent.name + '\n')
                 else:
                     elems.add(c)
                     c.verify(elems, i)
@@ -541,8 +531,7 @@ class SElement:
                                     self.attrs[k].append(item)
                         else:
                             # TODO Later inspect these when doing func/class relocation
-                            self.attrs[k] = str(
-                                self.attrs[k]) + ' -merged- ' + str(v)
+                            self.attrs[k] = str(self.attrs[k]) + ' -merged- ' + str(v)
                     else:
                         pass
 

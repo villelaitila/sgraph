@@ -336,7 +336,8 @@ class ModelCompare:
                         pass
                     else:
                         if cme != compareElem:
-                            ea2 = SElementAssociation(compareElem, cme, association.deptype, association.attrs)
+                            ea2 = SElementAssociation(compareElem, cme, association.deptype,
+                                                      association.attrs)
                             ea2.initElems()
                             if '_only_in' in compareElem.attrs:
                                 onlyIn = compareElem.attrs['_only_in']
@@ -426,8 +427,9 @@ class ModelCompare:
             else:
                 if not self.isListAttribute(attrName) or (isinstance(val1, str)
                                                           and len(val1) != len(val2)):
-                    outmap[c+'_'+attrName] = str(attributes1[attrName]) + \
-                                             self.getDelim(val1, val2) + str(attributes2[attrName])
+                    outmap[c + '_' +
+                           attrName] = (str(attributes1[attrName]) + self.getDelim(val1, val2) +
+                                        str(attributes2[attrName]))
                     attrs.add(attrName)
                 elif self.isListAttribute(attrName):
                     items1 = list()
@@ -445,8 +447,9 @@ class ModelCompare:
                     items2.sort()
 
                     if items1 != items2:
-                        outmap[c+'_'+attrName] = attributes1[attrName] + self.getDelim(val1, val2) \
-                                                 + attributes2[attrName]
+                        outmap[c + '_' +
+                               attrName] = (attributes1[attrName] + self.getDelim(val1, val2) +
+                                            attributes2[attrName])
                         attrs.add(attrName)
 
         keys1 = filter(lambda x: x not in intersection, keys1)

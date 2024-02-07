@@ -240,7 +240,8 @@ def combine_elems(elem, other_externals_by_name):
                     print('  - ' + e.getPath())
                     dep_summary_1 = defaultdict(int)
                     for association in e.incoming:
-                        dep_summary_1[(file_extension(association.fromElement), association.deptype)] += 1
+                        dep_summary_1[(file_extension(
+                            association.fromElement), association.deptype)] += 1
                     print('     * ' + str(dict(dep_summary_1)))
                     for d in dep_summary_1:
                         e.attrs.setdefault('user_exts', set()).add(d[0])
