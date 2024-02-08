@@ -18,6 +18,7 @@ import collections
 import codecs
 import zipfile
 from typing import Optional
+from xml.sax import parseString
 
 from .selement import SElement
 from .selementassociation import SElementAssociation
@@ -167,8 +168,8 @@ class SGraph:
         else:
             f = io.StringIO()
 
-        f.write('<model version="2.1">\n  <elements>\n')
-
+        f.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
+                '<model version="2.1">\n  <elements>\n')
         def enc_xml_a_n(n):
             if n[0].isdigit():
                 return "_" + n
@@ -540,7 +541,7 @@ class SGraph:
         return m
 
     @staticmethod
-    def parse_xml(filename_or_stream, type_rules=None, ignored_attributes=None, only_root=False):
+    def parse_xml(filename_or_stream, type_rules=None, ignored_attributes=None, only_root=False, parse_string=False):
         class SGraphXMLParser(xml.sax.handler.ContentHandler):
             def __init__(self):
                 super().__init__()
@@ -708,7 +709,7 @@ class SGraph:
         a = SGraphXMLParser()
         a.set_type_rules(type_rules)
         parser.setContentHandler(a)
-        if isinstance(filename_or_stream, str):
+        if isinstance(filename_or_stream, str) and not parse_string:
             filepath = filename_or_stream
             if os.path.exists(filepath):
                 try:
@@ -717,6 +718,8 @@ class SGraph:
                     pass
             else:
                 raise Exception('Cannot find file {}'.format(filepath))
+        elif isinstance(filename_or_stream, str) and parse_string:
+            parseString(filename_or_stream, a)
         else:
             try:
                 parser.parse(filename_or_stream)
@@ -729,6 +732,10 @@ class SGraph:
             sys.stderr.write('Warning: Parsing the model file did not yield any elements.')
 
         return graph
+
+    @staticmethod
+    def parse_xml_string(xml_string, type_rules=None, ignored_attributes=None, only_root=False):
+        return SGraph.parse_xml(xml_string, type_rules, ignored_attributes, only_root, parse_string=True)
 
     @staticmethod
     def parse_deps(filename):
