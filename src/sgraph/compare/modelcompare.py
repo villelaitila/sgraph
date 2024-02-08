@@ -292,12 +292,12 @@ class ModelCompare:
     def checkAssocLists(outgoing1, outgoing2, createdDeps, removedDeps):
         codes1 = {}
         codes2 = {}
-        for ea in outgoing1:
-            to = ea.toElement.getPath()
-            codes1[hash(to) + hash(ea.deptype)] = ea
-        for ea in outgoing2:
-            to = ea.toElement.getPath()
-            codes2[hash(to) + hash(ea.deptype)] = ea
+        for association in outgoing1:
+            to = association.toElement.getPath()
+            codes1[hash(to) + hash(association.deptype)] = association
+        for association in outgoing2:
+            to = association.toElement.getPath()
+            codes2[hash(to) + hash(association.deptype)] = association
         if sorted(codes1.keys()) == sorted(codes2.keys()):
             return 0
         else:
@@ -315,11 +315,11 @@ class ModelCompare:
                                elementCompareGraphModel: SGraph, easR: set, val: str,
                                avoidOverlap: bool):
         if thisElem.outgoing is not None:
-            for ea in thisElem.outgoing:
-                to = ea.toElement
+            for association in thisElem.outgoing:
+                to = association.toElement
                 cme = elementCompareGraphModel.getElement(to)
-                if ea in easR:
-                    ea2 = SElementAssociation(compareElem, cme, ea.deptype)
+                if association in easR:
+                    ea2 = SElementAssociation(compareElem, cme, association.deptype)
                     ea2.initElems()
                     ea2.addAttribute('_only_in', val)
                     if val == 'A':
@@ -336,7 +336,8 @@ class ModelCompare:
                         pass
                     else:
                         if cme != compareElem:
-                            ea2 = SElementAssociation(compareElem, cme, ea.deptype, ea.attrs)
+                            ea2 = SElementAssociation(compareElem, cme, association.deptype,
+                                                      association.attrs)
                             ea2.initElems()
                             if '_only_in' in compareElem.attrs:
                                 onlyIn = compareElem.attrs['_only_in']
@@ -426,8 +427,9 @@ class ModelCompare:
             else:
                 if not self.isListAttribute(attrName) or (isinstance(val1, str)
                                                           and len(val1) != len(val2)):
-                    outmap[c+'_'+attrName] = str(attributes1[attrName]) + \
-                                             self.getDelim(val1, val2) + str(attributes2[attrName])
+                    outmap[c + '_' +
+                           attrName] = (str(attributes1[attrName]) + self.getDelim(val1, val2) +
+                                        str(attributes2[attrName]))
                     attrs.add(attrName)
                 elif self.isListAttribute(attrName):
                     items1 = list()
@@ -445,8 +447,9 @@ class ModelCompare:
                     items2.sort()
 
                     if items1 != items2:
-                        outmap[c+'_'+attrName] = attributes1[attrName] + self.getDelim(val1, val2) \
-                                                 + attributes2[attrName]
+                        outmap[c + '_' +
+                               attrName] = (attributes1[attrName] + self.getDelim(val1, val2) +
+                                            attributes2[attrName])
                         attrs.add(attrName)
 
         keys1 = filter(lambda x: x not in intersection, keys1)
@@ -685,11 +688,11 @@ class ModelCompare:
                 new_ext_elems.append(x)
             elif '_only_in' in x.attrs and x.attrs['_only_in'] == 'A':
                 removed_ext_elems.append(x)
-            for ea in x.incoming:
-                if '_only_in' in ea.attrs and ea.attrs['_only_in'] == 'B':
-                    new_ext_deps.append(ea)
-                elif '_only_in' in ea.attrs and ea.attrs['_only_in'] == 'A':
-                    removed_ext_deps.append(ea)
+            for association in x.incoming:
+                if '_only_in' in association.attrs and association.attrs['_only_in'] == 'B':
+                    new_ext_deps.append(association)
+                elif '_only_in' in association.attrs and association.attrs['_only_in'] == 'A':
+                    removed_ext_deps.append(association)
 
             for c in x.children:
                 traverseExternal(c)

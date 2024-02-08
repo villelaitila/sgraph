@@ -75,13 +75,13 @@ class ModelApi:
             while len(s) > 0:
                 elem = s.pop()
                 if elem.outgoing is not None:
-                    for ea in elem.outgoing:
-                        if prevent_self_deps and self.matches_with_descendant(ea.toElement,
+                    for association in elem.outgoing:
+                        if prevent_self_deps and self.matches_with_descendant(association.toElement,
                                                                               tuple([f])):
                             pass
-                        elif ea.toElement in to_elems or self.matches_with_descendant(ea.toElement,
-                                tuple(to_elems)):
-                            self.add_if_matches(ea, found, dep_filter)
+                        elif (association.toElement in to_elems or
+                              self.matches_with_descendant(association.toElement, tuple(to_elems))):
+                            self.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     s.append(c)
@@ -99,15 +99,15 @@ class ModelApi:
                 else:
                     relations = elem.incoming
                 if relations is not None:
-                    for ea in relations:
+                    for association in relations:
                         if direction_is_out:
-                            other_elem = ea.toElement
+                            other_elem = association.toElement
                         else:
-                            other_elem = ea.fromElement
+                            other_elem = association.fromElement
 
                         if exclude is None:
-                            if not ModelApi.intra_file(ea):
-                                found.append(ea)
+                            if not ModelApi.intra_file(association):
+                                found.append(association)
 
                         elif prevent_self_deps and self.matches_with_descendant(other_elem,
                                                                                 tuple([f])):
@@ -115,7 +115,7 @@ class ModelApi:
 
                         elif other_elem not in exclude and not self.matches_with_descendant(
                                 other_elem, tuple(exclude)):
-                            self.add_if_matches(ea, found, dep_filter)
+                            self.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     stack.append(c)
@@ -236,11 +236,13 @@ class ModelApi:
             new_elem = sub_graph.createOrGetElement(elem)
             new_elem.attrs = elem.attrs
 
-            for ea in elem.outgoing:
-                handle_assocation(ea, ea.toElement, filter_outgoing, True, stack)
+            for association in elem.outgoing:
+                handle_assocation(association, association.toElement, filter_outgoing,
+                                  True, stack)
 
-            for ea in elem.incoming:
-                handle_assocation(ea, ea.fromElement, filter_incoming, False, stack)
+            for association in elem.incoming:
+                handle_assocation(association, association.fromElement, filter_incoming,
+                                  False, stack)
 
             stack.extend(elem.children)
 

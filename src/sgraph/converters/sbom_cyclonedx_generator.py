@@ -23,15 +23,15 @@ def extract_version(elem):
 
 
 def incoming_deps(elem, elem_name_patterns, deptypes):
-    for ea in elem.incoming:
+    for association in elem.incoming:
         name_pat = False
         for n in elem_name_patterns:
-            if n in ea.fromElement.name:
+            if n in association.fromElement.name:
                 name_pat = True
                 break
         if name_pat:
             for deptype in deptypes:
-                if ea.deptype == deptype:
+                if association.deptype == deptype:
                     return True
 
 
@@ -198,8 +198,8 @@ def elem_as_bom_data(elem, other_externals_by_name):
     else:
         if elem.incoming:
             dep_summary = defaultdict(int)
-            for ea in elem.incoming:
-                dep_summary[(file_extension(ea.fromElement), ea.deptype)] += 1
+            for association in elem.incoming:
+                dep_summary[(file_extension(association.fromElement), association.deptype)] += 1
             if len(other_externals_by_name[clean_name(elem.name)]) > 1:
                 other_excluding_parent = list(
                     filter(lambda x: x != elem.parent,
@@ -214,9 +214,9 @@ def elem_as_bom_data(elem, other_externals_by_name):
 
 
 def contains_incoming_ea_from_elems(e, elem_patterns):
-    for ea in e.incoming:
+    for association in e.incoming:
         for pat in elem_patterns:
-            if pat in ea.fromElement.name:
+            if pat in association.fromElement.name:
                 return True
 
 
@@ -224,10 +224,10 @@ def combine_elems(elem, other_externals_by_name):
     if not valid_for_bom(elem):
         dep_summary = defaultdict(int)
         pkg_deps = defaultdict(int)
-        for ea in elem.incoming:
-            if ea.deptype != 'new' and ea.deptype != 'inherits':
-                pkg_deps[(file_extension(ea.fromElement), ea.deptype)] += 1
-            dep_summary[(file_extension(ea.fromElement), ea.deptype)] += 1
+        for association in elem.incoming:
+            if association.deptype != 'new' and association.deptype != 'inherits':
+                pkg_deps[(file_extension(association.fromElement), association.deptype)] += 1
+            dep_summary[(file_extension(association.fromElement), association.deptype)] += 1
 
         if len(other_externals_by_name[clean_name(elem.name)]) > 1:
             other_excluding_parent = list(
@@ -239,8 +239,9 @@ def combine_elems(elem, other_externals_by_name):
                 for e in other_excluding_parent:
                     print('  - ' + e.getPath())
                     dep_summary_1 = defaultdict(int)
-                    for ea in e.incoming:
-                        dep_summary_1[(file_extension(ea.fromElement), ea.deptype)] += 1
+                    for association in e.incoming:
+                        dep_summary_1[(file_extension(
+                            association.fromElement), association.deptype)] += 1
                     print('     * ' + str(dict(dep_summary_1)))
                     for d in dep_summary_1:
                         e.attrs.setdefault('user_exts', set()).add(d[0])

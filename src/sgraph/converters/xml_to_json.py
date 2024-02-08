@@ -27,7 +27,7 @@ class XmlToNodesAndEdges:
         id=i if i exists. Otherwise id some other random string. N"""
         element_path = elem_node.get('i')
         if not element_path:
-            element_path = ''.join(random.choice(string.ascii_lowercase) for i in range(12))
+            element_path = ''.join(random.choice(string.ascii_lowercase) for _ in range(12))
         if element_path in self.__id_idx:
             # TODO Generate new id if this
             raise ValueError('Duplicate id entry %s' % element_path)

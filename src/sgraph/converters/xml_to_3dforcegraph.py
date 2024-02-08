@@ -51,8 +51,9 @@ traverse_parent_child(egm.rootNode, -1)
 
 def traverse_assocs(elem):
 
-    for ea in elem.outgoing:
-        links.append({"source": elem_to_id_map[elem], "target": elem_to_id_map[ea.toElement]})
+    for association in elem.outgoing:
+        links.append({"source": elem_to_id_map[elem], "target":
+            elem_to_id_map[association.toElement]})
 
     for c in elem.children:
         traverse_assocs(c)

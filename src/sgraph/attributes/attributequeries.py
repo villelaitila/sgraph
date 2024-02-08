@@ -290,7 +290,7 @@ def get_files_modified_by_commit(main_dir, commit_sha, repo_name) -> Set[str]:
         status, path = f.split(None, 1)
         options = dict(A='added', M='changed', D='removed')
         change_type = options.get(status, 'unknown')
-        filepath_status['/'.join([repo_name, path])] = change_type
+        filepath_status[str('/'.join([repo_name, path]))] = change_type
 
     commitdata_dataframe = read_attrs(main_dir + '/git/attr_git_propagated.csv.zip', sep=',')
     filepaths_set = set()
@@ -502,7 +502,7 @@ def get_developers(attrfile_filepath, days=365, zip_format=True):
     attributes = read_csv_attrs(attrfile_filepath, sep=',', zip_format=zip_format)
     data = attributes.to_dict()
     developers = set()
-    for element_id in sorted(['author_list_' + str(days)]):
+    for _ in sorted(['author_list_' + str(days)]):
         for developer in data['author_list_' + str(days)][0].split(';'):
             developers.add(developer)
     return sorted(developers)
