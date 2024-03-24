@@ -19,6 +19,8 @@ import zipfile
 from typing import Optional
 from xml.sax import parseString
 
+import deprecation
+
 from .selement import SElement
 from .selementassociation import SElementAssociation
 
@@ -65,8 +67,10 @@ class SGraph:
     def addPropagateAction(self, a, v):
         self.propagateActions.append((a, v))
 
+    @deprecation.deprecated(deprecated_in="0.4.1", removed_in="0.5",
+                            current_version=deprecation.__version__,
+                            details="Use either findElementFromPath or createOrGetElementFromPath instead of this.")
     def getElementFromPath(self, i):
-        """TODO Rename as createOrGetElementFromPath because the name is misleading."""
         if i.startswith('/'):
             i = i[1:]
         if '/' not in i:
@@ -76,27 +80,33 @@ class SGraph:
             return e
         return self.rootNode
 
-    def createOrGetElementFromPath(self, i: str):
-        if i.startswith('/'):
-            i = i[1:]
-        if '/' not in i:
-            child = self.rootNode.getChildByName(i)
+    def createOrGetElementFromPath(self, path: str):
+        """
+        Create or get existing element based on element path.
+        """
+        if path.startswith('/'):
+            path = path[1:]
+        if '/' not in path:
+            child = self.rootNode.getChildByName(path)
             if child is not None:
                 return child
-            e = SElement(self.rootNode, i)
+            e = SElement(self.rootNode, path)
             return e
-        elif len(i) > 0:
-            e = self.rootNode.createOrGetElement(i)
+        elif len(path) > 0:
+            e = self.rootNode.createOrGetElement(path)
             return e
         return self.rootNode
 
-    def findElementFromPath(self, i: str):
-        if i.startswith('/'):
-            i = i[1:]
-        if '/' not in i:
-            return self.rootNode.getChildByName(i)
-        elif len(i) > 0:
-            return self.rootNode.findElement(i)
+    def findElementFromPath(self, path: str):
+        """
+        Get an element from the model by path.
+        """
+        if path.startswith('/'):
+            path = path[1:]
+        if '/' not in path:
+            return self.rootNode.getChildByName(path)
+        elif len(path) > 0:
+            return self.rootNode.findElement(path)
         return self.rootNode
 
     def setMetaAttrs(self, m):
