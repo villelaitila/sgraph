@@ -19,8 +19,6 @@ import zipfile
 from typing import Optional
 from xml.sax import parseString
 
-import deprecation
-
 from .selement import SElement
 from .selementassociation import SElementAssociation
 
@@ -66,19 +64,6 @@ class SGraph:
 
     def addPropagateAction(self, a, v):
         self.propagateActions.append((a, v))
-
-    @deprecation.deprecated(deprecated_in="0.4.1", removed_in="0.5",
-                            current_version=deprecation.__version__,
-                            details="Use either findElementFromPath or createOrGetElementFromPath instead of this.")
-    def getElementFromPath(self, i):
-        if i.startswith('/'):
-            i = i[1:]
-        if '/' not in i:
-            return self.rootNode.getChildByName(i)
-        elif len(i) > 0:
-            e = self.rootNode.createOrGetElement(i)
-            return e
-        return self.rootNode
 
     def createOrGetElementFromPath(self, path: str):
         """
