@@ -16,11 +16,13 @@ class AttributeLoader:
         for elem_path, attrs in entries:
             if isinstance(elem_path, int):
                 raise Exception(f'Invalid attribute file {filepath} as id {elem_path} is numeric..')
+            elem = model.createOrGetElementFromPath(elem_path)
             for c in columns:
                 val = attrs[c]
                 if not isinstance(val, str):
                     val = '' if math.isnan(val) else val
-                model.createOrGetElementFromPath(elem_path).addAttribute(c, val)
+
+                elem.addAttribute(c, val)
 
         return model
 
