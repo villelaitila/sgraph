@@ -57,14 +57,14 @@ class SGraphAnalysis:
                             for func_call in f.incoming:
                                 # Self dependencies e.g. recursive calls is not suitable base to
                                 # generate dynamic deps
-                                if func_call.fromElement != func_call.toElement:
-                                    # Do not create new self dependencies
-                                    if func_call.fromElement != f2:
-                                        dynamic_call = SElementAssociation(
-                                            func_call.fromElement, f2,
-                                            'dynamic_' + func_call.deptype, func_call.attrs)
-                                        hash_num = dynamic_call.getHashNum()
-                                        new_deps[hash_num] = dynamic_call
+                                if (func_call.fromElement != func_call.toElement
+                                        and func_call.fromElement != f2
+                                        and not func_call.deptype.startswith('dynamic_')):
+                                    dyn_type = 'dynamic_' + func_call.deptype
+                                    dynamic_call = SElementAssociation(
+                                        func_call.fromElement, f2, dyn_type, func_call.attrs)
+                                    hash_num = dynamic_call.getHashNum()
+                                    new_deps[hash_num] = dynamic_call
 
             else:
                 for c in elemC.children:
