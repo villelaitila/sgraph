@@ -11,6 +11,7 @@ class SGraphFiltering:
         """
         Remove dependencies
         :param model:
+        :param dep_types_to_remove:
         :return:
         """
         dep_types_to_remove = set(dep_types_to_remove)
@@ -36,14 +37,16 @@ class SGraphFiltering:
         model.traverse(remove)
 
     @staticmethod
-    def remove_dependencies_by_paths(model: SGraph, from_path, to_path):
+    def remove_dependencies_by_paths(model: SGraph, from_path: str, to_path: str):
         """
         Remove dependencies
-        :param model:
+        :param model: model
+        :param from_path: from elemenet path
+        :param to_path: to element path
         :return:
         """
-        e1 = model.getElementFromPath(from_path)
-        e2 = model.getElementFromPath(to_path)
+        e1 = model.findElementFromPath(from_path)
+        e2 = model.findElementFromPath(to_path)
         remove_assocs_list = []
 
         def remove_eas(elem):
@@ -61,13 +64,14 @@ class SGraphFiltering:
                 r.remove()
 
     @staticmethod
-    def remove_dependencies_by_from_path(model: SGraph, from_path):
+    def remove_dependencies_by_from_path(model: SGraph, from_path: str):
         """
         Remove dependencies
-        :param model:
+        :param model: model
+        :param from_path: from element path
         :return:
         """
-        from_elem = model.getElementFromPath(from_path)
+        from_elem = model.findElementFromPath(from_path)
         if from_elem is None:
             return
 
@@ -88,13 +92,14 @@ class SGraphFiltering:
                 r.remove()
 
     @staticmethod
-    def remove_dependencies_by_to_path(model: SGraph, to_path):
+    def remove_dependencies_by_to_path(model: SGraph, to_path: str):
         """
         Remove dependencies
-        :param model:
+        :param model: model
+        :param to_path: to element path
         :return:
         """
-        to_elem = model.getElementFromPath(to_path)
+        to_elem = model.findElementFromPath(to_path)
         if to_elem is None:
             return
 

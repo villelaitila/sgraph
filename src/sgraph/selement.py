@@ -9,7 +9,7 @@ DEBUG = False
 
 class SElement:
     __slots__ = 'name', 'parent', 'children', 'childrenDict', 'outgoing', 'incoming', 'attrs', \
-                'human_readable_name'
+        'human_readable_name'
 
     def __init__(self, parent: Optional['SElement'], name: str):
         if name == '':
@@ -33,8 +33,8 @@ class SElement:
                 if DEBUG:
                     raise Exception('Error: overlapping elements related to {} under {}, types: '
                                     '{} and {}'.format(
-                                        self.name, self.parent.getPath(), '<not known>',
-                                        self.parent.childrenDict[self.name].getType()))
+                        self.name, self.parent.getPath(), '<not known>',
+                        self.parent.childrenDict[self.name].getType()))
                 else:
                     raise SElementMergedException(
                         'Element {} tried to be merged with an existing element '
@@ -491,7 +491,7 @@ class SElement:
 
         for association in list(other.outgoing):
             if association.toElement in current_deps and association.deptype in current_deps[
-                    association.toElement]:
+                association.toElement]:
                 # already exists
                 pass
             elif self != association.toElement:
@@ -508,7 +508,7 @@ class SElement:
 
         for association in list(other.incoming):
             if association.fromElement in current_deps and association.deptype in current_deps[
-                    association.fromElement]:
+                association.fromElement]:
                 # already exists
                 pass
             elif association.fromElement != self:

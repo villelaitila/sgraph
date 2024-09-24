@@ -46,7 +46,7 @@ class ModelLoader:
             filepath_of_model_root = filepath.replace('/dependency/modelfile.xml.zip', '').replace(
                 '/dependency/modelfile.xml', '')
             a = AttributeLoader()
-            model, missing_attr_files = a.load_all_files(model, filepath_of_model_root)
+            model, missing_attr_files = a.load_all_files(model, filepath_of_model_root, ignored_attributes)
 
             for missing in missing_attr_files:
                 if missing != 'attr_temporary.csv':
@@ -62,8 +62,7 @@ class ModelLoader:
         return model
 
     # noinspection PyMethodMayBeStatic
-    def load_attributes(self, model: SGraph, filepath: str, dep_types: list = None,
-                        ignored_attributes: list = None) -> SGraph:
+    def load_attributes(self, model: SGraph, filepath: str, ignored_attributes: list = None) -> SGraph:
         """
         Loads attribute files of a model.
         When returning model and [None], it means that the model path did not match to the usual
@@ -74,21 +73,16 @@ class ModelLoader:
 
         :param model:
         :param filepath: model filepath
-        :param dep_types: dependency types list or None
         :param ignored_attributes: list of attribute names to ignore while parsing XML model or None
         :return: the model SGraph object
         """
         ignored_attributes = ignored_attributes or []
 
-        if dep_types is None:
-            # TODO Not used.
-            dep_types = ['IGNORE dynamic_function_ref', 'IGNORE dynamic_typeref_member']
-
         # TODO What else would good to hide by default, maybe everything dynamic_*?
         filepath_of_model_root = filepath.replace('/dependency/modelfile.xml.zip', '').replace(
             '/dependency/modelfile.xml', '')
         a = AttributeLoader()
-        model, missing_attr_files = a.load_all_files(model, filepath_of_model_root)
+        model, missing_attr_files = a.load_all_files(model, filepath_of_model_root, ignored_attributes)
 
         for missing in missing_attr_files:
             if missing != 'attr_temporary.csv':

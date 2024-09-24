@@ -22,7 +22,7 @@ class ModelApi:
         self.egm = model
 
     def getElementByPath(self, filepath):
-        return self.egm.getElementFromPath(filepath)
+        return self.egm.findElementFromPath(filepath)
 
     def getChildrenByType(self, element, elemType):
         return [x for x in element.children if x.typeEquals(elemType)]
