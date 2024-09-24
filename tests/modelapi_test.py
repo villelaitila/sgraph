@@ -2,7 +2,7 @@ from sgraph import ModelApi
 from sgraph.loader import ModelLoader
 import os
 
-from sgraph.modelapi import FilterAssocations
+from sgraph.modelapi import FilterAssocations, HaveAttributes
 
 MODEL_PATH = '/nginx/src/core/'
 
@@ -74,16 +74,17 @@ def test_filter_model_with_indirect():
                                        filter_outgoing=FilterAssocations.DirectAndIndirect,
                                        filter_incoming=FilterAssocations.DirectAndIndirect)
     assert [
-        'directory-that-depends-on-nginx.c', 'nginx', 'used-directly-from-nginx',
-        'used-indirectly-from-nginx'
-    ] == sorted([x.name for x in subgraph1.rootNode.children])
+               'directory-that-depends-on-nginx.c', 'nginx', 'used-directly-from-nginx',
+               'used-indirectly-from-nginx'
+           ] == sorted([x.name for x in subgraph1.rootNode.children])
 
     elem = subgraph1.findElementFromPath('/used-indirectly-from-nginx/src/cyclical-problem.c')
     assert None is not elem
     assert 'simple dependency cycle' == elem.attrs['description']
 
     elem = subgraph1.findElementFromPath(
-        '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c/child/child-of-child/child-of-child-of-child'  # noqa
+        '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c/child/child-of-child/child-of-child-of-child'
+        # noqa
     )
     assert None is not elem
     assert 'testvalue2' == elem.attrs['test_attribute2']
@@ -117,3 +118,75 @@ def test_filter_model_with_indirect_outcoming_incoming():
     assert other.name == 'other'
     assert len(other.children) == 1
     assert other.children[0].name == 'other-1'
+
+
+def test_filter_model_with_attributes():
+    model, model_api = get_model_and_model_api('modelfile.xml')
+    used_indirectly_element = model.createOrGetElementFromPath(
+        '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
+    subgraph_no_attrs = model_api.filter_model(
+        used_indirectly_element, model,
+        filter_outgoing=FilterAssocations.Ignore,
+        filter_incoming=FilterAssocations.DirectAndIndirect,
+        have_attributes=HaveAttributes.Ignore)
+
+    stack = [subgraph_no_attrs.rootNode]
+    while stack:
+        elem = stack.pop()
+        for child in elem.children:
+            print(child.getPath())
+            assert not child.attrs
+            stack.append(child)
+
+def test_filter_model_with_attributes_copy():
+    original_model, model_api = get_model_and_model_api('modelfile.xml')
+    used_indirectly_element = original_model.createOrGetElementFromPath(
+        '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
+
+    subgraph_attrs_copy = model_api.filter_model(
+        used_indirectly_element, original_model,
+        filter_outgoing=FilterAssocations.Ignore,
+        filter_incoming=FilterAssocations.DirectAndIndirect,
+        have_attributes=HaveAttributes.IncludeCopy)
+
+    attributes = set()
+    stack = [subgraph_attrs_copy.rootNode]
+    while stack:
+        elem = stack.pop()
+        for child in elem.children:
+            if child.attrs:
+                attributes.update(child.attrs.keys())
+            stack.append(child)
+    print(attributes)
+    assert len(attributes) == 5
+
+    original_model.createOrGetElementFromPath('/asdf/aqwer').attrs['test_attribute1'] = 'testvalue1'
+
+    assert 'test_attribute1' not in subgraph_attrs_copy.createOrGetElementFromPath('/asdf/aqwer').attrs.keys()
+    print(subgraph_attrs_copy.to_deps(None))
+
+
+def test_filter_model_with_attributes_ref():
+    original_model, model_api = get_model_and_model_api('modelfile.xml')
+    e = '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c'
+    used_indirectly_element = original_model.createOrGetElementFromPath(e)
+
+    m2 = model_api.filter_model(
+        used_indirectly_element, original_model,
+        filter_outgoing=FilterAssocations.Ignore,
+        filter_incoming=FilterAssocations.DirectAndIndirect,
+        have_attributes=HaveAttributes.IncludeReference)
+
+    original_model.createOrGetElementFromPath(e).attrs['test_attribute1'] = 'testvalue1'
+    attributes = set()
+    stack = [m2.rootNode]
+    while stack:
+        elem = stack.pop()
+        for child in elem.children:
+            if child.attrs:
+                attributes.update(child.attrs.keys())
+            stack.append(child)
+    assert len(attributes) == 5
+    assert (original_model.createOrGetElementFromPath(e).attrs == m2.createOrGetElementFromPath(e).attrs)
+    print(m2.to_deps(None))
+

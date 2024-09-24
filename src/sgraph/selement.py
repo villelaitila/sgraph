@@ -2,6 +2,7 @@ import sys
 from typing import Optional, Dict, List
 
 from sgraph.exceptions import SElementMergedException
+from sgraph.definitions import HaveAttributes
 from sgraph.selementassociation import SElementAssociation
 
 DEBUG = False
@@ -556,13 +557,24 @@ class SElement:
         return 'type' in self.attrs and self.attrs['type'] != ''
 
     def getPathAsList(self):
-        a = list()
-        a.append(self.name)
-        p = self.parent
-        while p is not None and p.parent is not None:
-            a.append(p.name)
+        ancestor_names_ordered = []
+        p = self
+        while p:
+            ancestor_names_ordered.append(p.name)
             p = p.parent
-        return a
+        if ancestor_names_ordered:
+            ancestor_names_ordered.pop()
+        return ancestor_names_ordered
+
+    def get_ancestor_names_list(self):
+        ancestor_names_ordered = []
+        p = self
+        while p:
+            ancestor_names_ordered.insert(0, p.name)
+            p = p.parent
+        if ancestor_names_ordered:
+            ancestor_names_ordered.pop(0)
+        return ancestor_names_ordered
 
     def createElements(self, elems, startFrom):
         p = self
@@ -651,6 +663,29 @@ class SElement:
         else:
             # self.parent is None and elem.parent is None
             return True
+
+    def create_or_get_element(self, n: str):
+        if n.startswith('/'):
+            # sys.stderr.write('invalid id (1): '+n+'\n')
+            n = n[1:]
+
+        if '/' not in n:
+            child = self.getChildByName(n)
+            if child is not None:
+                return child, False
+            # print 'FOO',n
+            return SElement(self, n), True
+        else:
+            pos = n.find('/')
+            root = n[0:pos]
+            if len(self.children) == 0:
+                return self.createElementChain(n), True
+            else:
+                child = self.getChildByName(root)
+                if child is not None:
+                    return child.create_or_get_element(n[pos + 1:])
+                else:
+                    return self.createElementChain(n), True
 
 
 class ElementIterator:
