@@ -1,15 +1,10 @@
+import copy
 import functools
-from enum import Enum
 
 from sgraph import SElement
 from sgraph import SElementAssociation
 from sgraph import SGraph
-
-
-class FilterAssocations(Enum):
-    Ignore = 1
-    Direct = 2
-    DirectAndIndirect = 3
+from sgraph.definitions import FilterAssocations, HaveAttributes
 
 
 class ModelApi:
@@ -22,7 +17,7 @@ class ModelApi:
         self.egm = model
 
     def getElementByPath(self, filepath):
-        return self.egm.getElementFromPath(filepath)
+        return self.egm.findElementFromPath(filepath)
 
     def getChildrenByType(self, element, elemType):
         return [x for x in element.children if x.typeEquals(elemType)]
@@ -156,7 +151,8 @@ class ModelApi:
 
     def filter_model(self, source_elem, source_graph,
                      filter_outgoing: FilterAssocations = FilterAssocations.Direct,
-                     filter_incoming: FilterAssocations = FilterAssocations.Direct):
+                     filter_incoming: FilterAssocations = FilterAssocations.Direct,
+                     have_attributes: HaveAttributes = HaveAttributes.IncludeCopy):
         """
         Filter a sub graph from source_graph related to source elem.
 
@@ -176,11 +172,12 @@ class ModelApi:
         :param source_graph: the overall graph to be filtered
         :param filter_outgoing: filtering mode for outgoing dependencies
         :param filter_incoming: filtering mode for incoming dependencies
+        :param have_attributes: have attributes included, either as copy or reference, or ignore
         :return: new graph, that contains independent new SElement objects with same topology as
         in the source_graph
         """
         sub_graph = SGraph()
-        sub_graph.createOrGetElement(source_elem)
+        _elem, _is_new = sub_graph.create_or_get_element(source_elem)
         stack = [source_elem]
 
         def is_descendant_of_source_elem(element):
@@ -191,7 +188,7 @@ class ModelApi:
                     return True
 
         def create_assoc(x, other, is_outgoing, ea):
-            new_or_existing_referred_elem, is_new = sub_graph.create_or_get_element(x)
+            new_or_existing_referred_elem, this_is_new = sub_graph.create_or_get_element(x)
 
             if is_outgoing:
                 SElementAssociation(other, new_or_existing_referred_elem, ea.deptype,
@@ -201,31 +198,30 @@ class ModelApi:
                 SElementAssociation(new_or_existing_referred_elem, other, ea.deptype,
                                     ea.attrs).initElems()
 
-            return new_or_existing_referred_elem, is_new
+            return new_or_existing_referred_elem, this_is_new
 
-        def handle_assocation(ea, related_elem, filter_setting, is_outgoing, stack):
+        def handle_assocation(the_elem, ea, related_elem, filter_setting, is_outgoing, assoc_stack):
             descendant_of_src = is_descendant_of_source_elem(related_elem)
 
             if not descendant_of_src and filter_setting == FilterAssocations.Ignore:
                 return
 
-            new_or_existing_referred_elem, is_new = create_assoc(related_elem, new_elem,
-                                                                 is_outgoing, ea)
+            new_or_existing_referred_elem, this_new = create_assoc(related_elem, the_elem, is_outgoing, ea)
 
             if descendant_of_src:
                 # No need to create descendants since those will be anyway created later as part of
                 # the main iteration.
                 return
             elif filter_setting == FilterAssocations.Direct:
-                if is_new:
+                if this_new:
                     # Avoid creating descendants multiple times.
-                    self.create_descendants(related_elem, new_or_existing_referred_elem)
+                    self.create_descendants(related_elem, new_or_existing_referred_elem, have_attributes)
 
             elif filter_setting == FilterAssocations.DirectAndIndirect:
                 # Get all indirectly and directly used elements into the subgraph, including
                 # their descendant elements.
                 if related_elem not in handled:
-                    stack.append(related_elem)
+                    assoc_stack.append(related_elem)
 
         handled = set()
         # Traverse related elements from the source_graph using stack
@@ -233,40 +229,55 @@ class ModelApi:
             elem = stack.pop(0)
             handled.add(elem)
 
-            new_elem = sub_graph.createOrGetElement(elem)
-            new_elem.attrs = elem.attrs
-
+            the_elem, _is_new = sub_graph.create_or_get_element(elem)
             for association in elem.outgoing:
-                handle_assocation(association, association.toElement, filter_outgoing,
+                handle_assocation(the_elem, association, association.toElement, filter_outgoing,
                                   True, stack)
 
             for association in elem.incoming:
-                handle_assocation(association, association.fromElement, filter_incoming,
+                handle_assocation(the_elem, association, association.fromElement, filter_incoming,
                                   False, stack)
 
             stack.extend(elem.children)
 
         # Now that elements have been created, copy attribute data from the whole graph, via
-        # traversal using two stacks.
-        stack = [sub_graph.rootNode]
-        whole_graph_stack = [source_graph.rootNode]
-        while stack:
-            elem = stack.pop(0)
-            corresponding_source_elem = whole_graph_stack.pop(0)
-            elem.attrs = corresponding_source_elem.attrs.copy()
-            for elem in elem.children:
-                stack.append(elem)
-                whole_graph_stack.append(corresponding_source_elem.getChildByName(elem.name))
+        # traversal using two stacks. Earlier phases did not grab attributes on purpose, to make things
+        # more simple.
+        if have_attributes in (HaveAttributes.IncludeReference, HaveAttributes.IncludeCopy):
+            stack = [sub_graph.rootNode]
+            whole_graph_stack = [source_graph.rootNode]
+            while stack:
+                elem = stack.pop(0)
+                corresponding_source_elem = whole_graph_stack.pop(0)
+
+                if have_attributes == HaveAttributes.IncludeReference:
+                    elem.attrs = corresponding_source_elem.attrs
+                elif have_attributes == HaveAttributes.IncludeCopy:
+                    elem.attrs = corresponding_source_elem.attrs.copy()
+
+                for elem in elem.children:
+                    stack.append(elem)
+                    whole_graph_stack.append(corresponding_source_elem.getChildByName(elem.name))
+        elif have_attributes == HaveAttributes.Ignore:
+            pass
 
         return sub_graph
 
-    def create_descendants(self, related_elem: SElement, new_or_existing_referred_elem: SElement):
-
+    def create_descendants(self, related_elem: SElement, new_or_existing_referred_elem: SElement,
+                           have_attributes: HaveAttributes = HaveAttributes.Ignore):
         stack = [(related_elem, new_or_existing_referred_elem)]
         while stack:
-            orig, new = stack.pop(0)
+            orig_and_new: tuple[SElement, SElement] = stack.pop(0)
 
-            if orig.children:
-                for child in orig.children:
-                    new_child = new.createOrGetElement(child.name)
+            if orig_and_new[0].children:
+                for child in orig_and_new[0].children:
+                    new_child, is_new = orig_and_new[1].create_or_get_element(child.name)
+                    if is_new:
+                        if have_attributes == HaveAttributes.IncludeReference:
+                            new_child.attrs = child.attrs
+                        elif have_attributes == HaveAttributes.IncludeCopy:
+                            new_child.attrs = copy.copy(child.attrs)
+                        elif have_attributes == HaveAttributes.Ignore:
+                            pass
+                        stack.append((child, new_child))
                     stack.append((child, new_child))

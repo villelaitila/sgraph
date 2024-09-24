@@ -19,6 +19,7 @@ import zipfile
 from typing import Optional
 from xml.sax import parseString
 
+from .definitions import HaveAttributes
 from .selement import SElement
 from .selementassociation import SElementAssociation
 
@@ -468,7 +469,7 @@ class SGraph:
             return parentMatch.getChildByName(elem.name)
 
     def createOrGetElement(self, elem: SElement):
-        elems = list(reversed(elem.getPathAsList()))
+        elems = elem.get_ancestor_names_list()
 
         p = self.rootNode
         for i in range(len(elems)):
@@ -487,7 +488,7 @@ class SGraph:
         :param elem:
         :return: tuple of the matched element and boolean describing if new element was created.
         """
-        elems = list(reversed(elem.getPathAsList()))
+        elems = elem.get_ancestor_names_list()
 
         p = self.rootNode
         for i in range(len(elems)):
