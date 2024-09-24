@@ -1,25 +1,20 @@
-import click
+import argparse
 import re
 import sys
-"""
+
+doc_message = """
 Use like this:
 
  python3 show_model.py |python3 filter_deps.py --pattern-from /NetflixOSS/External
 
  Or to show main element
 
- python3 show_model.py |grep -v /NetflixOSS/External |python3 filter_deps.py 
-     --pattern-from /\\w+/\\w+ --pattern-to /\\w+/\\w+ --equation a!=b --deps-only True
+ python3 show_model.py |grep -v /NetflixOSS/External |python3 filter_deps.py --pattern-from /\\w+/\\w+ 
+     --pattern-to /\\w+/\\w+ --equation a!=b --deps-only
 
 """
 
 
-@click.command()
-@click.option('--pattern-from', prompt='Pattern FROM', default='', help='Pattern for from element.')
-@click.option('--pattern-to', prompt='Pattern TO', default='', help='Pattern for to element.')
-@click.option('--equation', default='', help='Equation')
-@click.option('--deps-only', default=False, help='Deps only')
-@click.option('--debug', default=False, help='Debug')
 def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
     """Filter dependencies"""
     pfrom = None
@@ -75,4 +70,12 @@ def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
 
 
 if __name__ == '__main__':
-    dofiltering()
+    parser = argparse.ArgumentParser(description='Filter dependencies\n' + doc_message)
+    parser.add_argument('--pattern-from', default='', help='Pattern for from element.')
+    parser.add_argument('--pattern-to', default='', help='Pattern for to element.')
+    parser.add_argument('--equation', default='', help='Equation')
+    parser.add_argument('--deps-only', action='store_true', help='Deps only')
+    parser.add_argument('--debug', action='store_true', help='Debug')
+
+    args = parser.parse_args()
+    dofiltering(args.pattern_from, args.pattern_to, args.equation, args.deps_only, args.debug)
