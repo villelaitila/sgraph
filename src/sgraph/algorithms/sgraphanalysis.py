@@ -11,6 +11,16 @@ class SGraphAnalysis:
         :param model:
         :return:
         """
+
+        # Avoid creating duplicate associations with help of hash
+        existing_associations_by_hash = {}
+        stack = [model.rootNode]
+        while stack:
+            elem = stack.pop(0)
+            for assoc in elem.outgoing:
+                existing_associations_by_hash[assoc.getHashNum()] = assoc
+            stack.extend(elem.children)
+
         new_deps = {}
 
         def getOverwrittenMembers(memberF, elemC):
@@ -64,13 +74,15 @@ class SGraphAnalysis:
                                     dynamic_call = SElementAssociation(
                                         func_call.fromElement, f2, dyn_type, func_call.attrs)
                                     hash_num = dynamic_call.getHashNum()
-                                    new_deps[hash_num] = dynamic_call
 
-            else:
-                for c in elemC.children:
-                    findAndCopyAsDynamicDeps(c)
+                                    if hash_num not in existing_associations_by_hash:
+                                        new_deps[hash_num] = dynamic_call
 
-        model.traverse(findAndCopyAsDynamicDeps)
+        stack = [model.rootNode]
+        while stack:
+            elem = stack.pop(0)
+            findAndCopyAsDynamicDeps(elem)
+            stack.extend(elem.children)
 
         for _, dep in sorted(new_deps.items()):
             dep.initElems()
