@@ -84,7 +84,7 @@ def bom_ref(elem, v):
 license_mapping_to_spdx_id = {}
 
 
-def resolve_license_spdx_id(license, elem):
+def resolve_license_spdx_id(license):
     acceptable_licenses = {'MIT'}
     if license in acceptable_licenses:
         return license
@@ -106,7 +106,7 @@ def bom_licenses(elem):
         'SPDX_OTHER_TODO': ''
     }
     if 'license' in elem.attrs:
-        license_spdx_id = resolve_license_spdx_id(elem.attrs['license'], elem)
+        license_spdx_id = resolve_license_spdx_id(elem.attrs['license'])
         return [{
             'license': {
                 'id': license_spdx_id,
@@ -164,7 +164,8 @@ def elem_as_bom_data(elem, other_externals_by_name):
         }
       ]
 
-    :param elem:
+    :param elem: element
+    :param other_externals_by_name: dict of external elements by name
     :return:
     """
     licenses = bom_licenses(elem)

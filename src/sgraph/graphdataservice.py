@@ -51,11 +51,6 @@ def get_latest_model(output_dir, analysis_target_name):
                 modelpath = ts_dir + '/model.xml.zip'
                 if os.path.exists(modelpath):
                     modelpaths.append(modelpath)
-                else:
-                    # Use old modelpath
-                    modelpath = ts_dir + '/dependency/modelfile.xml.zip'
-                    if os.path.exists(modelpath):
-                        modelpaths.append(modelpath)
     if modelpaths:
         modelpaths.sort()
         modelpath = modelpaths[-1]
