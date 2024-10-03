@@ -5,7 +5,7 @@ import os
 from sgraph.modelapi import FilterAssocations, HaveAttributes
 
 MODEL_PATH = '/nginx/src/core/'
-
+MODELFILE = 'modelfile.xml'
 
 # Helper for creating the model and model api
 def get_model_and_model_api(file_name):
@@ -17,7 +17,7 @@ def get_model_and_model_api(file_name):
 
 
 def test_filter_model():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
 
     # Check that model root node has two children nginx and foo
     assert 5 == len(model.rootNode.children)
@@ -38,7 +38,7 @@ def test_filter_model():
 
 
 def test_filter_model_keeps_children_of_outgoing_dependency():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     nginxc_element = model.createOrGetElementFromPath(f'{MODEL_PATH}nginx.c')
     subgraph = model_api.filter_model(nginxc_element, model)
     nginxh_element = subgraph.createOrGetElementFromPath(f'{MODEL_PATH}nginx.h')
@@ -48,7 +48,7 @@ def test_filter_model_keeps_children_of_outgoing_dependency():
 
 
 def test_filter_model_with_ignore_param():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     elem1 = model.createOrGetElementFromPath('/nginx')
     subgraph1 = model_api.filter_model(elem1, model, filter_outgoing=FilterAssocations.Ignore,
                                        filter_incoming=FilterAssocations.Ignore)
@@ -56,7 +56,7 @@ def test_filter_model_with_ignore_param():
 
 
 def test_filter_model_direct():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     nginxc_element = model.createOrGetElementFromPath(f'{MODEL_PATH}nginx.c')
     subgraph = model_api.filter_model(nginxc_element, model,
                                       filter_incoming=FilterAssocations.Direct,
@@ -68,7 +68,7 @@ def test_filter_model_direct():
 
 
 def test_filter_model_with_indirect():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     elem1 = model.createOrGetElementFromPath('/nginx')
     subgraph1 = model_api.filter_model(elem1, model,
                                        filter_outgoing=FilterAssocations.DirectAndIndirect,
@@ -91,7 +91,7 @@ def test_filter_model_with_indirect():
 
 
 def test_filter_model_with_indirect_incoming():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     used_indirectly_element = model.createOrGetElementFromPath(
         '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
     subgraph = model_api.filter_model(
@@ -121,7 +121,7 @@ def test_filter_model_with_indirect_outcoming_incoming():
 
 
 def test_filter_model_with_attributes():
-    model, model_api = get_model_and_model_api('modelfile.xml')
+    model, model_api = get_model_and_model_api(MODELFILE)
     used_indirectly_element = model.createOrGetElementFromPath(
         '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
     subgraph_no_attrs = model_api.filter_model(
@@ -139,7 +139,7 @@ def test_filter_model_with_attributes():
             stack.append(child)
 
 def test_filter_model_with_attributes_copy():
-    original_model, model_api = get_model_and_model_api('modelfile.xml')
+    original_model, model_api = get_model_and_model_api(MODELFILE)
     used_indirectly_element = original_model.createOrGetElementFromPath(
         '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c')
 
@@ -167,7 +167,7 @@ def test_filter_model_with_attributes_copy():
 
 
 def test_filter_model_with_attributes_ref():
-    original_model, model_api = get_model_and_model_api('modelfile.xml')
+    original_model, model_api = get_model_and_model_api(MODELFILE)
     e = '/used-indirectly-from-nginx/src/used-indirectly-from-nginx.c'
     used_indirectly_element = original_model.createOrGetElementFromPath(e)
 

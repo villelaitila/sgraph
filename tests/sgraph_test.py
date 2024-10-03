@@ -1,10 +1,21 @@
 import copy
+import os
 
-from sgraph import SGraph
+from sgraph import SGraph, ModelApi
+from sgraph.loader import ModelLoader
 
+MODELFILE = 'modelfile.xml'
+
+# Helper for creating the model
+def get_model(file_name):
+    dirname = os.path.dirname(__file__)
+    filename = os.path.join(dirname, file_name)
+    modelLoader = ModelLoader()
+    model = modelLoader.load_model(filename)
+    return model
 
 def test_deepcopy():
-    graph1 = SGraph.parse_xml_or_zipped_xml('modelfile.xml')
+    graph1 = get_model(MODELFILE)
     graph2 = copy.deepcopy(graph1)
     assert graph1.rootNode.getNodeCount() == graph2.rootNode.getNodeCount()
     elem_names_1 = list([x.name for x in graph1.rootNode.children[0].children])
@@ -16,7 +27,7 @@ def test_deepcopy():
 
 
 def test_calculate_model_stats():
-    graph = SGraph.parse_xml_or_zipped_xml('modelfile.xml')
+    graph = get_model(MODELFILE)
     dependenciesCount, nodesCount, depTypeCounts, depToElemRatio = graph.calculate_model_stats()
     assert dependenciesCount == 6
     assert depToElemRatio == 21
