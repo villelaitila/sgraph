@@ -16,11 +16,10 @@ import sys
 import uuid
 import xml.sax.handler
 import zipfile
-from copy import copy
+from copy import copy, deepcopy
 from typing import Optional
 from xml.sax import parseString
 
-from .definitions import HaveAttributes
 from .selement import SElement
 from .selementassociation import SElementAssociation
 
@@ -1008,32 +1007,23 @@ class SGraph:
         self.modelAttrs['model_path'] = filepath
 
     def __deepcopy__(self, memo):
-        """
-        Classic way
-
-        cls = self.__class__
-        result = cls.__new__(cls)
-        memo[id(self)] = result
-        for k, v in self.__dict__.items():
-            setattr(result, k, deepcopy(v, memo))
-        return result
-
-        :param memo:
-        :return:
-        """
         result = SGraph(SElement(None, ''))
         result.metaAttrs = copy(self.metaAttrs)
         result.modelAttrs = copy(self.modelAttrs)
         result.propagateActions = copy(self.propagateActions)
 
-        # TODO totalModel link is not preserved in deepcopy.
+        if self.totalModel:
+            if self.totalModel == self:
+                result.totalModel = result
+            else:
+                result.totalModel = deepcopy(self.totalModel)
 
         stack = [self.rootNode]
         new_stack = [result.rootNode]
         old_to_new_map = {}
         while stack:
-            elem = stack.pop(0)
-            new_elem = new_stack.pop(0)
+            elem = stack.pop()
+            new_elem = new_stack.pop()
             old_to_new_map[elem] = new_elem
             for association in elem.outgoing:
                 new_association = SElementAssociation(None, None, '', {})
@@ -1049,10 +1039,10 @@ class SGraph:
                 stack.append(child)
                 new_stack.append(new_child)
 
-        # Now fix the associations
+        # All elements have been created, now fix the associations' toElement reference
         new_stack = [result.rootNode]
         while new_stack:
-            new_elem = new_stack.pop(0)
+            new_elem = new_stack.pop()
             for association in new_elem.outgoing:
                 association.toElement = old_to_new_map[association.toElement]
                 association.toElement.incoming.append(association)

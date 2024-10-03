@@ -2,7 +2,6 @@ import sys
 from typing import Optional, Dict, List
 
 from sgraph.exceptions import SElementMergedException
-from sgraph.definitions import HaveAttributes
 from sgraph.selementassociation import SElementAssociation
 
 DEBUG = False
