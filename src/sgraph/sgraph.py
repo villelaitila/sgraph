@@ -16,10 +16,10 @@ import sys
 import uuid
 import xml.sax.handler
 import zipfile
+from copy import copy, deepcopy
 from typing import Optional
 from xml.sax import parseString
 
-from .definitions import HaveAttributes
 from .selement import SElement
 from .selementassociation import SElementAssociation
 
@@ -1005,6 +1005,50 @@ class SGraph:
 
     def set_model_path(self, filepath):
         self.modelAttrs['model_path'] = filepath
+
+    def __deepcopy__(self, memo):
+        result = SGraph(SElement(None, ''))
+        result.metaAttrs = copy(self.metaAttrs)
+        result.modelAttrs = copy(self.modelAttrs)
+        result.propagateActions = copy(self.propagateActions)
+
+        if self.totalModel:
+            if self.totalModel == self:
+                result.totalModel = result
+            else:
+                result.totalModel = deepcopy(self.totalModel)
+
+        stack = [self.rootNode]
+        new_stack = [result.rootNode]
+        old_to_new_map = {}
+        while stack:
+            elem = stack.pop()
+            new_elem = new_stack.pop()
+            old_to_new_map[elem] = new_elem
+            for association in elem.outgoing:
+                new_association = SElementAssociation(None, None, '', {})
+                new_association.fromElement = new_elem
+                new_association.toElement = association.toElement
+                new_association.deptype = association.deptype
+                new_association.attrs = copy(association.attrs)
+                new_elem.outgoing.append(new_association)
+
+            for child in elem.children:
+                new_child = SElement(new_elem, child.name)
+                new_child.attrs = copy(child.attrs)
+                stack.append(child)
+                new_stack.append(new_child)
+
+        # All elements have been created, now fix the associations' toElement reference
+        new_stack = [result.rootNode]
+        while new_stack:
+            new_elem = new_stack.pop()
+            for association in new_elem.outgoing:
+                association.toElement = old_to_new_map[association.toElement]
+                association.toElement.incoming.append(association)
+            for child in new_elem.children:
+                new_stack.append(child)
+        return result
 
 
 class Counter:

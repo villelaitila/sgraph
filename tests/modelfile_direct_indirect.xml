@@ -15,8 +15,8 @@
         </e>
     </e>
     <e n="other" >
-      <e i="6" n="other-1"></e>
-      <e i="7" n="other-2"></e>
+      <e i="6" n="other-1" />
+      <e i="7" n="other-2" />
     </e>
   </elements>
 </model>
