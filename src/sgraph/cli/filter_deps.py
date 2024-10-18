@@ -15,7 +15,7 @@ Use like this:
 """
 
 
-def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
+def dofiltering(pattern_from: str, pattern_to: str, equation: str, deps_only: bool, debug: bool):
     """Filter dependencies"""
     pfrom = None
     pto = None
@@ -54,14 +54,14 @@ def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
                             sys.stderr.write('Skip line, compare: missing match objects.\n')
                         continue
 
-                if equation == 'a==b' and from_m.group(0) == to_m.group(0):
-                    pass
-                elif equation == 'a!=b' and from_m.group(0) != to_m.group(0):
-                    pass
-                else:
-                    if debug:
-                        sys.stderr.write('Skip line, Condition failed\n')
-                    continue
+                    if equation == 'a==b' and from_m.group(0) == to_m.group(0):
+                        pass
+                    elif equation == 'a!=b' and from_m.group(0) != to_m.group(0):
+                        pass
+                    else:
+                        if debug:
+                            sys.stderr.write('Skip line, Condition failed\n')
+                        continue
 
             print(depline)
         else:

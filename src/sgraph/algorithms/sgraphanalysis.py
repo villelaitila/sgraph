@@ -1,6 +1,5 @@
 # Perform analysis on the graph itself
-from sgraph import SElementAssociation
-from sgraph import SGraph
+from sgraph import SGraph, SElementAssociation, SElement
 
 
 class SGraphAnalysis:
@@ -23,7 +22,7 @@ class SGraphAnalysis:
 
         new_deps = {}
 
-        def getOverwrittenMembers(memberF, elemC):
+        def getOverwrittenMembers(memberF: SElement, elemC: SElement):
 
             superclasses = [elemC]
             handled = set()
@@ -44,12 +43,12 @@ class SGraphAnalysis:
 
             return overwritten
 
-        def is_inherited_or_implemented(elem):
+        def is_inherited_or_implemented(elem: SElement):
             for i in elem.incoming:
                 if i.deptype == 'inherits' or i.deptype == 'implements':
                     return True
 
-        def findAndCopyAsDynamicDeps(elemC):
+        def findAndCopyAsDynamicDeps(elemC: SElement):
             """
             for each class C that has incoming inherits/implements dependencies D,
               for each memberfunc F of C that has any incoming dependencies D2
@@ -87,7 +86,7 @@ class SGraphAnalysis:
         for _, dep in sorted(new_deps.items()):
             dep.initElems()
 
-    def merge_with_parent(self, child, parent):
+    def merge_with_parent(self, child: SElement, parent: SElement):
         if not child.children:
             for association in child.outgoing:
                 association.fromElement = parent
@@ -109,7 +108,7 @@ class SGraphAnalysis:
             parent.children.remove(child)
             parent.update_children_dict()
 
-    def flatten_all_inside_by_type(self, graph, etype):
+    def flatten_all_inside_by_type(self, graph: SGraph, etype: str):
         s = [graph.rootNode]
         while s:
             e = s.pop(0)

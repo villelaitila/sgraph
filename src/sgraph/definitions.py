@@ -11,4 +11,3 @@ class HaveAttributes(Enum):
     Ignore = 1
     IncludeCopy = 2
     IncludeReference = 3
-

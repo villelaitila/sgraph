@@ -8,7 +8,8 @@ from sgraph import ModelApi
 from sgraph import SGraph
 
 
-def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, _recursion, flavour):
+def extract_subgraph_as_json(analysis_target_name: str, output_dir: str, element_path: str,
+                             _recursion: str, flavour: str):
     """
     Extracts subraph as JSOn. recursion parameter not yet supported.
     :param analysis_target_name:
@@ -22,17 +23,17 @@ def extract_subgraph_as_json(analysis_target_name, output_dir, element_path, _re
     return produce_output(flavour, subgraph)
 
 
-def extract_filtered_subgraph(analysis_target_name, output_dir, element_path):
-        graph = extract_and_load(analysis_target_name, output_dir)
-        elem = graph.createOrGetElementFromPath(element_path)
-        if elem:
-            # TODO handle also recursion param
-            return ModelApi().filter_model(elem, graph)
-        else:
-            raise Exception(f'Element path {element_path} not found')
+def extract_filtered_subgraph(analysis_target_name: str, output_dir: str, element_path: str):
+    graph = extract_and_load(analysis_target_name, output_dir)
+    elem = graph.createOrGetElementFromPath(element_path)
+    if elem:
+        # TODO handle also recursion param
+        return ModelApi().filter_model(elem, graph)
+    else:
+        raise Exception(f'Element path {element_path} not found')
 
 
-def extract_and_load(analysis_target_name, output_dir):
+def extract_and_load(analysis_target_name: str, output_dir: str):
     modelfile = get_latest_model(output_dir, analysis_target_name)
     if modelfile is None:
         raise ModelNotFoundException(
@@ -49,7 +50,7 @@ def extract_and_load(analysis_target_name, output_dir):
         return graph
 
 
-def produce_output(outputformat, subg):
+def produce_output(outputformat: str, subg: SGraph):
     if outputformat == 'cytoscape':
         return graph_to_cyto(subg)
     elif outputformat == 'softagram':
@@ -58,7 +59,7 @@ def produce_output(outputformat, subg):
         raise Exception(f'Unsupported outputformat {outputformat}')
 
 
-def get_latest_model(output_dir, analysis_target_name):
+def get_latest_model(output_dir: str, analysis_target_name: str):
     target_dir = output_dir + '/' + analysis_target_name
     modelpaths = []
     if os.path.isdir(target_dir):

@@ -1,31 +1,40 @@
 import copy
 import functools
+from typing import Callable
 
-from sgraph import SElement
-from sgraph import SElementAssociation
-from sgraph import SGraph
+from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.definitions import FilterAssocations, HaveAttributes
 
 
 class ModelApi:
-    def __init__(self, filepath=None, model=None):
+    egm: SGraph
+
+    def __init__(
+        self,
+        filepath: str | None = None,
+        model: SGraph | None = None,
+    ):
         if filepath:
             self.model = SGraph.parse_xml(filepath)
         elif model:
             self.model = model
+        else:
+            raise ValueError("Either filepath or model must be provided")
 
-        self.egm = model
+        #? Is this intentionally "model" and not "self.model"?
+        # self.egm = model
+        self.egm = self.model
 
-    def getElementByPath(self, filepath):
+    def getElementByPath(self, filepath: str):
         return self.egm.findElementFromPath(filepath)
 
-    def getChildrenByType(self, element, elemType):
+    def getChildrenByType(self, element: SElement, elemType: str):
         return [x for x in element.children if x.typeEquals(elemType)]
 
-    def getElementsByName(self, name):
-        matching = list()
+    def getElementsByName(self, name: str):
+        matching: list[SElement] = []
 
-        def recursiveTraverser(elem):
+        def recursiveTraverser(elem: SElement):
             if elem.name == name:
                 matching.append(elem)
             for child in elem.children:
@@ -34,57 +43,75 @@ class ModelApi:
         recursiveTraverser(self.egm.rootNode)
         return matching
 
-    def getCalledFunctions(self, funcElem):
+    def getCalledFunctions(self, funcElem: SElement):
         functionCalls = [x for x in funcElem.outgoing if x.deptype == 'function_ref']
         return set(map(lambda x: x.toElement, functionCalls))
 
-    def getCallingFunctions(self, funcElem):
+    def getCallingFunctions(self, funcElem: SElement):
         functionCalls = [x for x in funcElem.incoming if x.deptype == 'function_ref']
         return set(map(lambda x: x.fromElement, functionCalls))
 
-    def getUsedElements(self, elem):
+    def getUsedElements(self, elem: SElement):
         associations = [x for x in elem.outgoing]
-        return set(map(lambda x: x.fromElement, associations))
+        #? Is this intentionally "fromElement" and not "toElement"?
+        # return set(map(lambda x: x.fromElement, associations))
+        return set(map(lambda x: x.toElement, associations))
 
-    def getUserElements(self, elem):
+    def getUserElements(self, elem: SElement):
         associations = [x for x in elem.incoming]
         return set(map(lambda x: x.fromElement, associations))
 
-    def filter(self, filterfunc):
-        matched_elements = []
+    def filter(self, filterfunc: Callable[[SElement], bool]):
+        matched_elements: list[SElement] = []
         for c in self.egm.rootNode.children:
             self.__filter(c, filterfunc, matched_elements)
         return matched_elements
 
-    def __filter(self, c, filterfunc, matched_elements):
+    def __filter(
+        self,
+        c: SElement,
+        filterfunc: Callable[[SElement], bool],
+        matched_elements: list[SElement],
+    ):
         if filterfunc(c):
             matched_elements.append(c)
         for cc in c.children:
             self.__filter(cc, filterfunc, matched_elements)
 
-    def query_dependencies_between(self, from_elems, to_elems, dep_filter, prevent_self_deps):
-        found = []
+    def query_dependencies_between(
+        self,
+        from_elems: list[SElement],
+        to_elems: list[SElement],
+        dep_filter: tuple[str, str, str] | None,
+        prevent_self_deps: bool,
+    ):
+        found: list[SElementAssociation] = []
         for f in from_elems:
-            s = list()
+            s: list[SElement] = list()
             s.append(f)
             while len(s) > 0:
                 elem = s.pop()
-                if elem.outgoing is not None:
-                    for association in elem.outgoing:
-                        if prevent_self_deps and self.matches_with_descendant(association.toElement,
-                                                                              tuple([f])):
-                            pass
-                        elif (association.toElement in to_elems or
-                              self.matches_with_descendant(association.toElement, tuple(to_elems))):
-                            self.add_if_matches(association, found, dep_filter)
+                for association in elem.outgoing:
+                    if prevent_self_deps and self.matches_with_descendant(
+                            association.toElement, tuple([f])):
+                        pass
+                    elif (association.toElement in to_elems
+                          or self.matches_with_descendant(association.toElement, tuple(to_elems))):
+                        self.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     s.append(c)
         return found
 
-    def query_dependencies(self, elements, exclude, dep_filter, direction_is_out,
-                           prevent_self_deps):
-        found = []
+    def query_dependencies(
+        self,
+        elements: list[SElement],
+        exclude: list[SElement] | None,
+        dep_filter: tuple[str, str, str] | None,
+        direction_is_out: bool,
+        prevent_self_deps: bool,
+    ):
+        found: list[SElementAssociation] = []
         for f in elements:
             stack = [f]
             while len(stack) > 0:
@@ -93,31 +120,29 @@ class ModelApi:
                     relations = elem.outgoing
                 else:
                     relations = elem.incoming
-                if relations is not None:
-                    for association in relations:
-                        if direction_is_out:
-                            other_elem = association.toElement
-                        else:
-                            other_elem = association.fromElement
+                for association in relations:
+                    if direction_is_out:
+                        other_elem = association.toElement
+                    else:
+                        other_elem = association.fromElement
 
-                        if exclude is None:
-                            if not ModelApi.intra_file(association):
-                                found.append(association)
+                    if exclude is None:
+                        if not ModelApi.intra_file(association):
+                            found.append(association)
 
-                        elif prevent_self_deps and self.matches_with_descendant(other_elem,
-                                                                                tuple([f])):
-                            pass
+                    elif prevent_self_deps and self.matches_with_descendant(other_elem, tuple([f])):
+                        pass
 
-                        elif other_elem not in exclude and not self.matches_with_descendant(
-                                other_elem, tuple(exclude)):
-                            self.add_if_matches(association, found, dep_filter)
+                    elif other_elem not in exclude and not self.matches_with_descendant(
+                            other_elem, tuple(exclude)):
+                        self.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     stack.append(c)
         return found
 
     @functools.lru_cache(maxsize=None)
-    def matches_with_descendant(self, elem: SElement, potential_ancestors_list):
+    def matches_with_descendant(self, elem: SElement, potential_ancestors_list: list[SElement]):
         # NOTE: LRU CACHE NEEDS TO BE CLEARED IF THE MODEL IS CHANGED!
         for potential_ancestor in potential_ancestors_list:
             if elem.isDescendantOf(potential_ancestor):
@@ -125,16 +150,19 @@ class ModelApi:
         return False
 
     @staticmethod
-    def intra_file(ea):
+    def intra_file(ea: SElementAssociation):
         return ea.fromElement.getAncestorOfType('file') == ea.toElement.getAncestorOfType('file')
 
     @staticmethod
-    def not_a_sibling_ref(ea):
-        if ea.fromElement.parent == ea.toElement.parent:
-            return False
-        return True
+    def not_a_sibling_ref(ea: SElementAssociation):
+        return ea.fromElement.parent != ea.toElement.parent
 
-    def add_if_matches(self, ea, found, dep_filter):
+    def add_if_matches(
+        self,
+        ea: SElementAssociation,
+        found: list[SElementAssociation],
+        dep_filter: tuple[str, str, str] | None,
+    ):
         if dep_filter is not None:
             if dep_filter[1] == '==' and ea.check_attr(dep_filter[0], dep_filter[2]):
                 if not ModelApi.intra_file(ea):
@@ -142,17 +170,22 @@ class ModelApi:
             elif dep_filter[1] == '!=' and not ea.check_attr(dep_filter[0], dep_filter[2]):
                 if not ModelApi.intra_file(ea):
                     found.append(ea)
-            elif dep_filter[1] == 'in' and dep_filter[2] in ea.attrs.get(dep_filter[0], ''):
+            elif dep_filter[1] == 'in' and isinstance(  # TODO: Clean up
+                (attr := ea.attrs.get(dep_filter[0], '')), str) and dep_filter[2] in attr:
                 if not ModelApi.intra_file(ea):
                     found.append(ea)
         else:
             if not ModelApi.intra_file(ea):
                 found.append(ea)
 
-    def filter_model(self, source_elem, source_graph,
-                     filter_outgoing: FilterAssocations = FilterAssocations.Direct,
-                     filter_incoming: FilterAssocations = FilterAssocations.Direct,
-                     have_attributes: HaveAttributes = HaveAttributes.IncludeCopy):
+    def filter_model(
+        self,
+        source_elem: SElement,
+        source_graph: SGraph,
+        filter_outgoing: FilterAssocations = FilterAssocations.Direct,
+        filter_incoming: FilterAssocations = FilterAssocations.Direct,
+        have_attributes: HaveAttributes = HaveAttributes.IncludeCopy,
+    ):
         """
         Filter a sub graph from source_graph related to source elem.
 
@@ -180,14 +213,15 @@ class ModelApi:
         _elem, _is_new = sub_graph.create_or_get_element(source_elem)
         stack = [source_elem]
 
-        def is_descendant_of_source_elem(element):
+        def is_descendant_of_source_elem(element: SElement):
             ancestor = element
-            while ancestor is not None and ancestor.parent is not None:
+            while ancestor.parent is not None:
                 ancestor = ancestor.parent
                 if ancestor == source_elem:
                     return True
+            return False
 
-        def create_assoc(x, other, is_outgoing, ea):
+        def create_assoc(x: SElement, other: SElement, is_outgoing: bool, ea: SElementAssociation):
             new_or_existing_referred_elem, this_is_new = sub_graph.create_or_get_element(x)
 
             if is_outgoing:
@@ -200,13 +234,21 @@ class ModelApi:
 
             return new_or_existing_referred_elem, this_is_new
 
-        def handle_assocation(the_elem, ea, related_elem, filter_setting, is_outgoing, assoc_stack):
+        def handle_assocation(
+            the_elem: SElement,
+            ea: SElementAssociation,
+            related_elem: SElement,
+            filter_setting: FilterAssocations,
+            is_outgoing: bool,
+            assoc_stack: list[SElement],
+        ):
             descendant_of_src = is_descendant_of_source_elem(related_elem)
 
             if not descendant_of_src and filter_setting == FilterAssocations.Ignore:
                 return
 
-            new_or_existing_referred_elem, this_new = create_assoc(related_elem, the_elem, is_outgoing, ea)
+            new_or_existing_referred_elem, this_new = create_assoc(related_elem, the_elem,
+                                                                   is_outgoing, ea)
 
             if descendant_of_src:
                 # No need to create descendants since those will be anyway created later as part of
@@ -215,7 +257,8 @@ class ModelApi:
             elif filter_setting == FilterAssocations.Direct:
                 if this_new:
                     # Avoid creating descendants multiple times.
-                    self.create_descendants(related_elem, new_or_existing_referred_elem, have_attributes)
+                    self.create_descendants(related_elem, new_or_existing_referred_elem,
+                                            have_attributes)
 
             elif filter_setting == FilterAssocations.DirectAndIndirect:
                 # Get all indirectly and directly used elements into the subgraph, including
@@ -223,7 +266,7 @@ class ModelApi:
                 if related_elem not in handled:
                     assoc_stack.append(related_elem)
 
-        handled = set()
+        handled: set[SElement] = set()
         # Traverse related elements from the source_graph using stack
         while stack:
             elem = stack.pop(0)
@@ -257,14 +300,24 @@ class ModelApi:
 
                 for elem in elem.children:
                     stack.append(elem)
-                    whole_graph_stack.append(corresponding_source_elem.getChildByName(elem.name))
+                    corresponding_elem = corresponding_source_elem.getChildByName(elem.name)
+                    if corresponding_elem is not None:
+                        whole_graph_stack.append(corresponding_elem)
+                    else:
+                        raise ValueError(
+                            f"Element \"{elem.name}\" from sub graph not found in the whole graph but it should have been"
+                        )
         elif have_attributes == HaveAttributes.Ignore:
             pass
 
         return sub_graph
 
-    def create_descendants(self, related_elem: SElement, new_or_existing_referred_elem: SElement,
-                           have_attributes: HaveAttributes = HaveAttributes.Ignore):
+    def create_descendants(
+        self,
+        related_elem: SElement,
+        new_or_existing_referred_elem: SElement,
+        have_attributes: HaveAttributes = HaveAttributes.Ignore,
+    ):
         stack = [(related_elem, new_or_existing_referred_elem)]
         while stack:
             orig_and_new: tuple[SElement, SElement] = stack.pop(0)

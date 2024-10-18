@@ -1,5 +1,5 @@
 import sys
-from typing import Optional, Dict, List
+from typing import Callable, Optional
 
 from sgraph.exceptions import SElementMergedException
 from sgraph.selementassociation import SElementAssociation
@@ -11,6 +11,15 @@ class SElement:
     __slots__ = 'name', 'parent', 'children', 'childrenDict', 'outgoing', 'incoming', 'attrs', \
         'human_readable_name'
 
+    name: str
+    parent: Optional["SElement"]
+    children: list["SElement"]
+    childrenDict: dict[str, "SElement"]
+    outgoing: list["SElementAssociation"]
+    incoming: list["SElementAssociation"]
+    attrs: dict[str, str | int | list[str]]
+    human_readable_name: str
+
     def __init__(self, parent: Optional['SElement'], name: str):
         if name == '':
             # sys.stderr.write('Creating with empty name\n')
@@ -21,9 +30,9 @@ class SElement:
         if self == parent:
             raise Exception('Self loop in model\n')
 
-        self.name: str = name
-        self.human_readable_name: str = ''
-        self.parent: Optional[SElement] = None
+        self.name = name
+        self.human_readable_name = ''
+        self.parent = None
         if parent is not None:
             self.parent = parent
             if self.name not in self.parent.childrenDict:
@@ -33,8 +42,8 @@ class SElement:
                 if DEBUG:
                     raise Exception('Error: overlapping elements related to {} under {}, types: '
                                     '{} and {}'.format(
-                        self.name, self.parent.getPath(), '<not known>',
-                        self.parent.childrenDict[self.name].getType()))
+                                        self.name, self.parent.getPath(), '<not known>',
+                                        self.parent.childrenDict[self.name].getType()))
                 else:
                     raise SElementMergedException(
                         'Element {} tried to be merged with an existing element '
@@ -42,14 +51,14 @@ class SElement:
         else:
             self.parent = None
 
-        self.children: List[SElement] = []
-        self.childrenDict: Dict[str, SElement] = {}
-        self.outgoing: List[SElementAssociation] = []
-        self.incoming: List[SElementAssociation] = []
-        self.attrs: Dict = {}
+        self.children = []
+        self.childrenDict = {}
+        self.outgoing = []
+        self.incoming = []
+        self.attrs = {}
         # self.num = '0'
 
-    def addChild(self, child: 'SElement'):
+    def addChild(self, child: "SElement"):
         """
         Add child, but if there is an overlapping element, merge instead and return merged element.
         :param child: the child to be added.
@@ -72,7 +81,7 @@ class SElement:
 
         child.parent = self
 
-    def addChildIgnoreWithSameName(self, child, elemWithSameName):
+    def addChildIgnoreWithSameName(self, child: "SElement", elemWithSameName: "SElement"):
         """
         Add child, but if there is an overlapping element, merge instead and return merged element.
         Overwrite is allowed for the elemWithSameName
@@ -104,10 +113,10 @@ class SElement:
                     return self.childrenDict[child.name]
         child.parent = self
 
-    def addAttribute(self, a, v):
+    def addAttribute(self, a: str, v: str | list[str]):
         self.attrs[a] = v
 
-    def enclosingFilenameEndswith(self, postfix):
+    def enclosingFilenameEndswith(self, postfix: str):
         e = self
         while e.parent is not None:
             if e.name.endswith(postfix):
@@ -116,42 +125,56 @@ class SElement:
                 e = e.parent
         return False
 
-    def cumulateAttribute(self, a, v):
+    def cumulateAttribute(self, a: str, v: float):
         if a not in self.attrs:
             self.attrs[a] = str(v)
         else:
-            x = float(self.attrs[a]) + (v * 1.0)
+            attr = self.attrs[a]
+            if isinstance(attr, list):
+                raise ValueError(f"Attribute {a} is a list")
+            x = float(attr) + (v * 1.0)
             self.attrs[a] = str(x)
 
-    def cumulateListAttribute(self, a, v, avoid_duplicates):
+    def cumulateListAttribute(self, a: str, v: str, avoid_duplicates: bool):
         if a not in self.attrs:
             self.attrs[a] = str(v)
         else:
-            if not avoid_duplicates or v not in self.attrs[a]:
-                self.attrs[a] += ';' + v
+            attr = self.attrs[a]
+            if not isinstance(attr, str):
+                raise ValueError(f"Attribute {a} is not a string")
+            if not avoid_duplicates or v not in attr:
+                attr += ';' + v
+                self.attrs[a] = attr
 
-    def cumulateIntAttribute(self, a, v):
+    def cumulateIntAttribute(self, a: str, v: int):
         if a not in self.attrs:
             self.attrs[a] = v
         else:
-            self.attrs[a] += v
+            attr = self.attrs[a]
+            if not isinstance(attr, int):
+                raise ValueError(f"Attribute {a} is not an integer")
+            attr += v
+            self.attrs[a] = attr
 
-    def traverseElements(self, visit):
+    def traverseElements(self, visit: Callable[["SElement"], None]):
         visit(self)
         for c in self.children:
             c.traverseElements(visit)
 
-    def traverseIncoming(self, visited):
-        for incoming_element in set(self.incoming) - visited:
+    def traverseIncoming(self, visited: set["SElement"]):
+        #? Was this fixed correctly?
+        for incoming_element in self.incoming:
+            if incoming_element.fromElement in visited:
+                continue
             visited.add(incoming_element.fromElement)
             incoming_element.fromElement.traverseIncoming(visited)
         return visited
 
-    def removeElements(self, path):
+    def removeElements(self, path: str):
         splitted = path.split('/')
         self.removeElementsWithList(splitted)
 
-    def removeElementsWithList(self, splitted):
+    def removeElementsWithList(self, splitted: list[str]):
         if self.name == splitted[0]:
             if len(splitted) == 1:
                 self.remove()
@@ -159,7 +182,7 @@ class SElement:
                 for x in self.children:
                     x.removeElementsWithList(splitted[1:])
 
-    def detachChild(self, elem):
+    def detachChild(self, elem: "SElement"):
         """Always do this first before addChild"""
         elem.parent = None
         self.children.remove(elem)
@@ -169,7 +192,7 @@ class SElement:
             sys.stderr.write('Error: Probably duplicated element {} under {}'.format(
                 elem.name, self.getPath()))
 
-    def remove(self, leaveParentUntouched=False):
+    def remove(self, leaveParentUntouched: bool = False):
         if not leaveParentUntouched:
             if self.parent is not None:
                 self.parent.detachChild(self)
@@ -194,22 +217,21 @@ class SElement:
         for c in self.children:
             self.childrenDict[c.name] = c
 
-    def getNodeCount(self):
+    def getNodeCount(self) -> int:
         i = 1
         for x in self.children:
             i += x.getNodeCount()
 
         return i
 
-    def getEACount(self):
-
+    def getEACount(self) -> int:
         i = len(self.outgoing)
         for x in self.children:
             i += x.getEACount()
 
         return i
 
-    def getEATypes(self, theSet):
+    def getEATypes(self, theSet: set[str]):
 
         for association in self.outgoing:
             theSet.add(association.deptype)
@@ -217,7 +239,7 @@ class SElement:
         for x in self.children:
             x.getEATypes(theSet)
 
-    def getEATypeCounts(self, d: Dict[str, int]):
+    def getEATypeCounts(self, d: dict[str, int]):
         for association in self.outgoing:
             if association.deptype not in d:
                 d[association.deptype] = 1
@@ -236,8 +258,13 @@ class SElement:
         pathparts.reverse()
         return '/'.join(pathparts)
 
-    def getElementsByNameOnLevel(self, name, level, current_level=0):
-        out = []
+    def getElementsByNameOnLevel(
+        self,
+        name: str,
+        level: int,
+        current_level: int = 0,
+    ) -> list["SElement"]:
+        out: list[SElement] = []
         if current_level == level - 1:
             if name in self.childrenDict:
                 out.append(self.childrenDict[name])
@@ -250,7 +277,12 @@ class SElement:
                 out += c.getElementsByNameOnLevel(name, level, current_level + 1)
         return out
 
-    def recurseIncomingDependencies(self, elemlist, assoclist, outside_level=0):
+    def recurseIncomingDependencies(
+        self,
+        elemlist: list["SElement"],
+        assoclist: list[SElementAssociation] | None,
+        outside_level: int = 0,
+    ):
         for c in self.incoming:
             if outside_level == 0 or c.fromElement.getAncestorOfLevel(
                     outside_level) != c.toElement.getAncestorOfLevel(outside_level):
@@ -258,23 +290,24 @@ class SElement:
                 if assoclist is not None:
                     assoclist.append(c)
         for c in self.children:
+            #? Should outside_level be passed?
             c.recurseIncomingDependencies(elemlist, assoclist)
 
-    def getAllUsers(self, outside_level=0):
-        elems = []
+    def getAllUsers(self, outside_level: int = 0) -> set["SElement"]:
+        elems: list["SElement"] = []
         self.recurseIncomingDependencies(elems, None, outside_level)
         return set(elems)
 
-    def getAncestorOfLevel(self, level):
+    def getAncestorOfLevel(self, level: int) -> "SElement | None":
         x = self.getLevel()
         delta = x - level
         ancestor = self
-        while delta > 0:
+        while delta > 0 and ancestor is not None:
             ancestor = ancestor.parent
             delta -= 1
         return ancestor
 
-    def getAncestorOfType(self, t):
+    def getAncestorOfType(self, t: str) -> "SElement | None":
         """
         Return ancestor that has matching type.
         :param t: type (str)
@@ -283,13 +316,13 @@ class SElement:
         if self.typeEquals(t):
             return self
         ancestor = self
-        while ancestor is not None and ancestor.parent is not None:
+        while ancestor.parent is not None:
             ancestor = ancestor.parent
             if ancestor.typeEquals(t):
                 return ancestor
         return None
 
-    def getAncestorOfTypes(self, types):
+    def getAncestorOfTypes(self, types: list[str] | set[str]) -> "SElement | None":
         """
         Return ancestor that has matching type.
         :param types: type list or set
@@ -299,22 +332,22 @@ class SElement:
             if self.typeEquals(t):
                 return self
         ancestor = self
-        while ancestor is not None and ancestor.parent is not None:
+        while ancestor.parent is not None:
             ancestor = ancestor.parent
             for t in types:
                 if ancestor.typeEquals(t):
                     return ancestor
         return None
 
-    def getAncestors(self):
-        ancestor = self
-        ancestors = []
-        while ancestor is not None and ancestor.parent is not None:
+    def getAncestors(self) -> list["SElement"]:
+        ancestor: SElement | None = self
+        ancestors: list[SElement] = []
+        while ancestor.parent is not None:
             ancestor = ancestor.parent
             ancestors.append(ancestor)
         return ancestors
 
-    def isDescendantOf(self, anc):
+    def isDescendantOf(self, anc: "SElement"):
         if self == anc:
             return False
         p = self.parent
@@ -325,7 +358,7 @@ class SElement:
                 p = p.parent
         return False
 
-    def getRoot(self):
+    def getRoot(self) -> "SElement":
         p = self
         while p.parent is not None:
             p = p.parent
@@ -339,7 +372,7 @@ class SElement:
             level += 1
         return level
 
-    def getChildByName(self, n):
+    def getChildByName(self, n: str):
         if n in self.childrenDict:
             return self.childrenDict[n]
 
@@ -348,7 +381,7 @@ class SElement:
         #        return c
         return None
 
-    def findElement(self, n):
+    def findElement(self, n: str) -> "SElement | None":
         if n.startswith('/'):
             # sys.stderr.write('invalid id (2): '+n+'\n')
             n = n[1:]
@@ -367,7 +400,7 @@ class SElement:
                 else:
                     return None
 
-    def createOrGetElement(self, n: str):
+    def createOrGetElement(self, n: str) -> "SElement":
         if n.startswith('/'):
             # sys.stderr.write('invalid id (1): '+n+'\n')
             n = n[1:]
@@ -390,14 +423,14 @@ class SElement:
                 else:
                     return self.createElementChain(n)
 
-    def createElementChain(self, elemid):
+    def createElementChain(self, elemid: str) -> "SElement":
         # print 'FOO2',elemid
         current = self
         for n in elemid.split('/'):
             current = SElement(current, n)
         return current
 
-    def hasSiblingsRecursive(self):
+    def hasSiblingsRecursive(self) -> bool:
         if self.parent is None:
             return False
         found = -1
@@ -411,7 +444,7 @@ class SElement:
         else:
             return self.parent.hasSiblingsRecursive()
 
-    def setType(self, t):
+    def setType(self, t: str):
         if 'type' in self.attrs and self.attrs['type'] == 'repository':
             if t == 'dir':
                 # Do not overwrite existing type=repository, e.g. with less meaningful "dir" etc.
@@ -427,10 +460,13 @@ class SElement:
 
     def getType(self) -> str:
         if 'type' in self.attrs:
-            return self.attrs['type']
+            elem_type = self.attrs['type']
+            if not isinstance(elem_type, str):
+                raise ValueError(f"Element attribute 'type' is not a string: {elem_type}")
+            return elem_type
         return ''
 
-    def getNextSiblingRecursive(self):
+    def getNextSiblingRecursive(self) -> "SElement | None":
         if self.parent is None:
             return None
         c = self.parent.children
@@ -440,36 +476,38 @@ class SElement:
         else:
             return self.parent.getNextSiblingRecursive()
 
-    def verify(self, elems, i):
+    def verify(self, elems: set["SElement"], i: int):
         # if i % 1000 == 0:
         #    print(i)
-        if self.children is not None:
-            elems_by_name = {}
-            for c in self.children:
-                i += 1
-                if c.name in elems_by_name:
-                    raise Exception('Duplicate element? ' + c.getPath())
-                elems_by_name[c.name] = c
+        elems_by_name = {}
+        for c in self.children:
+            i += 1
+            if c.name in elems_by_name:
+                raise Exception('Duplicate element? ' + c.getPath())
+            elems_by_name[c.name] = c
 
-                if c.parent != self:
-                    print('Problem with element parent self ref..')
-                    print(self.getPath())
-                    print(c.parent.getPath())
-                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
-                                    c.parent.name + '\n')
-
-                if c in elems:
-                    print('Problem with element path')
-                    print(c.parent.parent.getPath())
-                    print(len(self.children))
-                    raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
-                                    c.parent.name + '\n')
+            if not c.parent or c.parent != self:
+                print('Problem with element parent self ref..')
+                print(self.getPath())
+                if self.parent is not None:
+                    print(self.parent.getPath())
                 else:
-                    elems.add(c)
-                    c.verify(elems, i)
+                    print('No parent?')
+                raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
+                                c.parent.name if c.parent is not None else 'no parent' + '\n')
+
+            if c in elems:
+                print('Problem with element path')
+                print(c.parent.parent.getPath() if c.parent.parent else 'no parent')
+                print(len(self.children))
+                raise Exception('Error: broken model related to elem ' + c.name + ' under ' +
+                                c.parent.name + '\n')
+            else:
+                elems.add(c)
+                c.verify(elems, i)
         return None
 
-    def merge(self, other, ignore_type=False, ignore_attrs=False):
+    def merge(self, other: "SElement", ignore_type: bool = False, ignore_attrs: bool = False):
         """
         Merge self with other, leaving other to irrelevancy.
         :param ignore_attrs: If True, ignore attributes
@@ -483,7 +521,7 @@ class SElement:
             # TODO Have some logic here to do merge correctly if overlapping children exists?
             self.addChild(c)
 
-        current_deps = {}
+        current_deps: dict["SElement", list[str]] = {}
         for association in self.outgoing:
             current_deps.setdefault(association.toElement, []).append(association.deptype)
 
@@ -491,7 +529,7 @@ class SElement:
 
         for association in list(other.outgoing):
             if association.toElement in current_deps and association.deptype in current_deps[
-                association.toElement]:
+                    association.toElement]:
                 # already exists
                 pass
             elif self != association.toElement:
@@ -508,7 +546,7 @@ class SElement:
 
         for association in list(other.incoming):
             if association.fromElement in current_deps and association.deptype in current_deps[
-                association.fromElement]:
+                    association.fromElement]:
                 # already exists
                 pass
             elif association.fromElement != self:
@@ -524,11 +562,16 @@ class SElement:
                 if k not in self.attrs:
                     self.attrs[k] = v
                 else:
-                    if self.attrs[k] != v:
+                    attr = self.attrs[k]
+                    if attr != v:
                         if isinstance(v, list):
+                            if not isinstance(attr, list):
+                                raise ValueError(
+                                    f"Attribute '{k}' is expected to be a list but is not: {attr}")
                             for item in v:
-                                if item not in self.attrs[k]:
-                                    self.attrs[k].append(item)
+                                if item not in attr:
+                                    attr.append(item)
+                            self.attrs[k] = attr
                         else:
                             # TODO Later inspect these when doing func/class relocation
                             self.attrs[k] = str(self.attrs[k]) + ' -merged- ' + str(v)
@@ -536,6 +579,8 @@ class SElement:
                         pass
 
             elif not ignore_type and k == 'type':
+                if not isinstance(v, str):
+                    raise ValueError(f"Element attribute 'type' is not a string: {v}")
                 if v != '' and not self.typeEquals(v):
                     self.setType(self.getType() + '_' + v)
 
@@ -543,7 +588,7 @@ class SElement:
             other.parent.detachChild(other)
             other.parent = None
 
-    def typeEquals(self, t):
+    def typeEquals(self, t: str) -> bool:
         if 'type' in self.attrs:
             return self.attrs['type'] == t
         else:
@@ -556,7 +601,7 @@ class SElement:
         return 'type' in self.attrs and self.attrs['type'] != ''
 
     def getPathAsList(self):
-        ancestor_names_ordered = []
+        ancestor_names_ordered: list[str] = []
         p = self
         while p:
             ancestor_names_ordered.append(p.name)
@@ -566,7 +611,7 @@ class SElement:
         return ancestor_names_ordered
 
     def get_ancestor_names_list(self):
-        ancestor_names_ordered = []
+        ancestor_names_ordered: list[str] = []
         p = self
         while p:
             ancestor_names_ordered.insert(0, p.name)
@@ -575,24 +620,21 @@ class SElement:
             ancestor_names_ordered.pop(0)
         return ancestor_names_ordered
 
-    def createElements(self, elems, startFrom):
-        p = self
+    def createElements(self, elems: list[str], startFrom: int):
+        p: SElement = self
         for i in range(startFrom, len(elems)):
             p = SElement(p, elems[i])
         return p
 
-    def equalsAttributes(self, e) -> bool:
-        if self.attrs is not None and e.attrs is not None:
-            return self.attrs == e.attrs
-        elif self.attrs is not None or e.attrs is not None:
-            return False
-        return True
+    def equalsAttributes(self, e: "SElement") -> bool:
+        #! Does this work correctly?
+        return self.attrs == e.attrs
 
-    def createAttributesFrom(self, attrs):
-        if attrs is not None and len(attrs) > 0:
+    def createAttributesFrom(self, attrs: dict[str, str | int | list[str]]):
+        if len(attrs) > 0:
             self.attrs.update(attrs)
 
-    def sibling_with(self, elem: 'SElement') -> bool:
+    def sibling_with(self, elem: "SElement") -> bool:
         return self.parent == elem.parent
 
     def isExternalElement(self):
@@ -602,14 +644,14 @@ class SElement:
                     return self.isDescendantOf(c)
         return False
 
-    def removeDescendantsIf(self, checker):
+    def removeDescendantsIf(self, checker: Callable[["SElement"], bool]):
         for child in list(self.children):
             if checker(child):
                 child.remove()
         for child in self.children:
             child.removeDescendantsIf(checker)
 
-    def getDescendants(self, descendants_list):
+    def getDescendants(self, descendants_list: list["SElement"]):
         for child in self.children:
             descendants_list.append(child)
             child.getDescendants(descendants_list)
@@ -626,8 +668,8 @@ class SElement:
 
     def clean_duplicate_associations(self):
         if self.outgoing:
-            ea_hashes = set()
-            dupes = []
+            ea_hashes: set[int] = set()
+            dupes: list[SElementAssociation] = []
             for association in self.outgoing:
                 num = association.getHashNum()
                 c = num
@@ -649,7 +691,7 @@ class SElement:
         for child in self.children:
             child.clean_duplicate_associations()
 
-    def elem_location_matches(self, elem):
+    def elem_location_matches(self, elem: "SElement") -> bool:
         if self.parent and elem.parent:
             if self.parent.name == elem.parent.name:
                 return self.parent.elem_location_matches(elem.parent)
@@ -663,7 +705,7 @@ class SElement:
             # self.parent is None and elem.parent is None
             return True
 
-    def create_or_get_element(self, n: str):
+    def create_or_get_element(self, n: str) -> tuple["SElement", bool]:
         if n.startswith('/'):
             # sys.stderr.write('invalid id (1): '+n+'\n')
             n = n[1:]
@@ -688,7 +730,9 @@ class SElement:
 
 
 class ElementIterator:
-    def __init__(self, elem):
+    current: SElement
+
+    def __init__(self, elem: SElement):
         self.current = elem
 
     def hasNext(self):
