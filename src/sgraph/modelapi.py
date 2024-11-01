@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import copy
 import functools
 from typing import Callable
@@ -21,8 +23,6 @@ class ModelApi:
         else:
             raise ValueError("Either filepath or model must be provided")
 
-        #? Is this intentionally "model" and not "self.model"?
-        # self.egm = model
         self.egm = self.model
 
     def getElementByPath(self, filepath: str):
@@ -53,8 +53,6 @@ class ModelApi:
 
     def getUsedElements(self, elem: SElement):
         associations = [x for x in elem.outgoing]
-        #? Is this intentionally "fromElement" and not "toElement"?
-        # return set(map(lambda x: x.fromElement, associations))
         return set(map(lambda x: x.toElement, associations))
 
     def getUserElements(self, elem: SElement):

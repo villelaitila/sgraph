@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sgraph import SElement, SGraph
 from sgraph.attributes import attributequeries
 

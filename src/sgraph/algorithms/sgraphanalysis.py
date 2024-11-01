@@ -1,5 +1,7 @@
 # Perform analysis on the graph itself
-from sgraph import SGraph, SElementAssociation, SElement
+from __future__ import annotations
+
+from sgraph import SElement, SElementAssociation, SGraph
 
 
 class SGraphAnalysis:
@@ -20,13 +22,13 @@ class SGraphAnalysis:
                 existing_associations_by_hash[assoc.getHashNum()] = assoc
             stack.extend(elem.children)
 
-        new_deps = {}
+        new_deps: dict[int, SElementAssociation] = {}
 
         def getOverwrittenMembers(memberF: SElement, elemC: SElement):
 
             superclasses = [elemC]
-            handled = set()
-            overwritten = []
+            handled: set[SElement] = set()
+            overwritten: list[SElement] = []
             while len(superclasses) > 0:
                 superclass = superclasses.pop(0)
                 handled.add(superclass)

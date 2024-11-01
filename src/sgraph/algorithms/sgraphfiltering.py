@@ -1,8 +1,9 @@
 """
 Filter graph by removing some content of it using some of remove_* functions.
 """
+from __future__ import annotations
 
-from sgraph import SGraph, SElement, SElementAssociation
+from sgraph import SElement, SElementAssociation, SGraph
 
 
 class SGraphFiltering:

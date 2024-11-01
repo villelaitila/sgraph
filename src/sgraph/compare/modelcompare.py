@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import difflib
 import sys
 
@@ -72,9 +74,8 @@ class ModelCompare:
         pass
 
     def compare(self, path1: str, path2: str):
-        #? What should be the correct implementation here? This doesn't seem to be correct.
-        model1 = SGraph(path1)
-        model2 = SGraph(path2)
+        model1 = SGraph.parse_xml_or_zipped_xml(path1)
+        model2 = SGraph.parse_xml_or_zipped_xml(path2)
         return self.compareModels(model1, model2)
 
     def compareModels(self, model1: SGraph, model2: SGraph, rename_detection: bool = False):

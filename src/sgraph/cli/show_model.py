@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 
 from sgraph import SGraph
@@ -13,7 +15,7 @@ Use like this:
 """
 
 
-def show_model(f: str, output_format='txt'):
+def show_model(f: str, output_format: str = 'txt'):
     """
     Parse given model (model path to xml.zip/xml file) and produce textual
     representation of it.

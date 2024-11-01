@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,7 +16,6 @@ class SElementAssociation:
     deptype: str
     attrs: dict[str, str | int | list[str]]
 
-    #? Is it ok to update return type?
     @staticmethod
     def create_unique_element_association(
         from_element: SElement,
@@ -56,7 +57,6 @@ class SElementAssociation:
         new_association = SElementAssociation(from_element, to_element, dependency_type,
                                               dependency_attributes)
         new_association.initElems()
-        # return {'existingOrNewAssociation': new_association, 'isNew': True}
         return new_association, True
 
     def __init__(
@@ -156,7 +156,7 @@ class SElementAssociation:
     def __str__(self):
         attrs = str(sorted(filter(lambda x: x[0] != 'type', self.attrs.items())))
         return self.fromElement.getPath() + ' -' + self.getType() + '-> ' \
-               + self.toElement.getPath() + ' ' + attrs
+            + self.toElement.getPath() + ' ' + attrs
 
     __repr__ = __str__
 

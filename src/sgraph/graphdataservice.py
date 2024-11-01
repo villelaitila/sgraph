@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import io
 import os
 import zipfile
 
-from sgraph.exceptions import ModelNotFoundException
+from sgraph import ModelApi, SGraph
 from sgraph.converters.sgraph_to_cytoscape import graph_to_cyto
-from sgraph import ModelApi
-from sgraph import SGraph
+from sgraph.exceptions import ModelNotFoundException
 
 
 def extract_subgraph_as_json(analysis_target_name: str, output_dir: str, element_path: str,

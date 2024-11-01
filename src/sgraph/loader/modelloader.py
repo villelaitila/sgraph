@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 
@@ -31,9 +33,6 @@ class ModelLoader:
         """
         ignored_attributes = ignored_attributes or []
 
-        #? This is not really used?
-        extracted_paths: list[str] = []
-
         if dep_types is None:
             dep_types = ['IGNORE dynamic_function_ref', 'IGNORE dynamic_typeref_member']
 
@@ -59,12 +58,6 @@ class ModelLoader:
                     sys.stderr.write('warning: cannot load default attribute file when loading the '
                                      'model for data mining. missing: ' + missing + '\n')
 
-        for extracted_path in extracted_paths:
-            if os.path.exists(extracted_path):
-                os.remove(extracted_path)
-            else:
-                print('model_loader.py: XML file already deleted by other process: ' +
-                      extracted_path)
         return model
 
     # noinspection PyMethodMayBeStatic

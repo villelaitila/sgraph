@@ -9,6 +9,8 @@ Example how to use this to parse and handle model files with this tool.
  print 'Nodes',egm.rootNode.getNodeCount()
 
 """
+from __future__ import annotations
+
 import codecs
 import io
 import os
@@ -918,13 +920,8 @@ class SGraph:
 
     @staticmethod
     def groupea(eas: list[SElementAssociation]):
-        tuples: list[
-            tuple[
-                list[SElementAssociation],
-                str,
-                dict[str, str | int | list[str]],
-            ],
-        ] = []
+        tuples: list[tuple[list[SElementAssociation], str, dict[str,
+                                                                str | int | list[str]], ], ] = []
         easmap: dict[str, list[SElementAssociation]] = {}
         for association in eas:
             k = str(association.attrs) + association.deptype
