@@ -1,10 +1,20 @@
-def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
+from __future__ import annotations
+
+from sgraph import SGraph
+
+
+def pretty_print_model_stats(
+    model: SGraph,
+    stats: tuple[int, int, dict[str, int], float] | None = None,
+    delta: tuple[int, int, dict[str, int], float] | None = None,
+    optional_label: str = '',
+):
     if stats is not None:
         pass  # using given
     else:
         stats = model.calculate_model_stats()
 
-    def str_delta(num):
+    def str_delta(num: float) -> str:
         if num < 0:
             return str(num)
         elif num > 0:
@@ -45,8 +55,8 @@ def pretty_print_model_stats(model, stats=None, delta=None, optional_label=''):
             if delta[2][k] == 0:
                 x += k + ', '
 
-        disappeared = ''
-        appeared = ''
+        disappeared: str = ''
+        appeared: str = ''
         for k in keys:
             if k not in depTypeCounts:
                 if delta[2][k] < 0:

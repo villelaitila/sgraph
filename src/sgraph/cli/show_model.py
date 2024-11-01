@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 
 from sgraph import SGraph
@@ -13,7 +15,7 @@ Use like this:
 """
 
 
-def show_model(f, output_format='txt'):
+def show_model(f: str, output_format: str = 'txt'):
     """
     Parse given model (model path to xml.zip/xml file) and produce textual
     representation of it.
@@ -26,7 +28,7 @@ def show_model(f, output_format='txt'):
     # TODO Support also visual outputs for small models, e.g. graphviz generated png/svg.
 
 
-def adjust_path(model_to_load, inside_container):
+def adjust_path(model_to_load: str, inside_container: bool) -> str:
     input_path = '/softagram/input'
     if inside_container and model_to_load.startswith('/opt' + input_path):
         model_to_load = model_to_load[4:]
@@ -35,7 +37,7 @@ def adjust_path(model_to_load, inside_container):
     return model_to_load
 
 
-def get_project_dirname_from_input_path(path):
+def get_project_dirname_from_input_path(path: str) -> str | None:
     """
     Turn .../projects/uid/name or .../projects/uid/name/foo... to uid
     :param path: ../projects/uid/path
@@ -48,13 +50,15 @@ def get_project_dirname_from_input_path(path):
             return path[pos + 10:pos2]
         else:
             return path[pos + 10:]
+    return None
 
 
 def main():
     model_file_path_or_project_id_or_project_name_or_none = None
     if len(sys.argv) > 1:
         model_file_path_or_project_id_or_project_name_or_none = sys.argv[1]
-    show_model(model_file_path_or_project_id_or_project_name_or_none)
+    if model_file_path_or_project_id_or_project_name_or_none:
+        show_model(model_file_path_or_project_id_or_project_name_or_none)
 
 
 if __name__ == '__main__':

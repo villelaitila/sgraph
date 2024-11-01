@@ -1,15 +1,17 @@
+from __future__ import annotations
+
 import difflib
 import sys
+
 import Levenshtein
 
+from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.compare.comparegraphattrs import CompareGraphAttrs
-from sgraph import SElementAssociation
-from sgraph import SGraph, SElement
 
 ignoredAttrs = {'days_since_modified'}
 
 
-def getnotnullattr(attributes2, attr):
+def getnotnullattr(attributes2: dict[str, str], attr: str):
     if attr in attributes2:
         if attributes2[attr] is None:
             return ''
@@ -17,7 +19,7 @@ def getnotnullattr(attributes2, attr):
     return ''
 
 
-def debunk_uniqueness(user, used, side):
+def debunk_uniqueness(user: SElement, used: SElement, side: str):
     for x in user.outgoing:
         if x.toElement == used:
             if '_only_in' not in x.attrs:
@@ -36,7 +38,7 @@ def debunk_uniqueness(user, used, side):
     return False
 
 
-def compare_parameters(elem_a, elem_b):
+def compare_parameters(elem_a: SElement, elem_b: SElement):
     """
     params is like "self;email;team_id;password;name"
 
@@ -48,14 +50,17 @@ def compare_parameters(elem_a, elem_b):
         if elem_a.attrs['params'] == elem_b.attrs['params']:
             return 1
         else:
-            params_a = elem_a.attrs['params'].split(';')
-            params_b = elem_b.attrs['params'].split(';')
-            sm = difflib.SequenceMatcher(None, params_a, params_b)
-            return sm.ratio()
+            params_a = elem_a.attrs['params']
+            params_b = elem_b.attrs['params']
+            if isinstance(params_a, str) and isinstance(params_b, str):
+                sm = difflib.SequenceMatcher(None, params_a, params_b)
+                return sm.ratio()
+            else:
+                raise Exception('Unexpected situation in compare_parameters, params not strings..')
     return 0
 
 
-def add_up_change_count(attrs):
+def add_up_change_count(attrs: set[str]):
     change_count = 0
     if 'hash' in attrs:
         change_count += 1
@@ -68,16 +73,16 @@ class ModelCompare:
     def __init__(self):
         pass
 
-    def compare(self, path1, path2):
-        model1 = SGraph(path1)
-        model2 = SGraph(path2)
+    def compare(self, path1: str, path2: str):
+        model1 = SGraph.parse_xml_or_zipped_xml(path1)
+        model2 = SGraph.parse_xml_or_zipped_xml(path2)
         return self.compareModels(model1, model2)
 
-    def compareModels(self, model1, model2, rename_detection=False):
+    def compareModels(self, model1: SGraph, model2: SGraph, rename_detection: bool = False):
         rootNode = SElement(None, '')
         compareModel = SGraph(rootNode)
-        createdDeps = []
-        removedDeps = []
+        createdDeps: list[SElementAssociation] = []
+        removedDeps: list[SElementAssociation] = []
 
         # If there is already a attr_temporary.csv that has been "spoiling" the compare,
         # by introducing some removed elements to the B model that should not be there..
@@ -92,8 +97,16 @@ class ModelCompare:
         return compareModel
 
     # self == SGraph
-    def compareWith(self, ma, mb, elementCompareGraphModel: 'SGraph', compareDeps: bool,
-                    createdDeps: list, removedDeps: list, renameDetection: bool):
+    def compareWith(
+        self,
+        ma: SGraph,
+        mb: SGraph,
+        elementCompareGraphModel: SGraph,
+        compareDeps: bool,
+        createdDeps: list[SElementAssociation],
+        removedDeps: list[SElementAssociation],
+        renameDetection: bool,
+    ):
 
         renamed_elem__old_name = {}
         if renameDetection:
@@ -135,27 +148,38 @@ class ModelCompare:
             self.mark_rename_elems_changed(renamed_elem__old_name, elementCompareGraphModel)
 
         # createdDeps and removedDeps will contain some duplicates because of how comparison works.
-        easCreated = set()
+        easCreated: set[SElementAssociation] = set()
         for e in createdDeps:
             easCreated.add(e)
-        easRemoved = set()
+        easRemoved: set[SElementAssociation] = set()
         for e in removedDeps:
             easRemoved.add(e)
 
         if compareDeps:
             for child in ma.rootNode.children:
                 compareElement = elementCompareGraphModel.getElement(child)
-                self.recurseNodesCreateDeps(child, compareElement, elementCompareGraphModel,
-                                            easRemoved, "A", False)
+                if compareElement:
+                    self.recurseNodesCreateDeps(child, compareElement, elementCompareGraphModel,
+                                                easRemoved, "A", False)
 
             for child in mb.rootNode.children:
                 compareElement = elementCompareGraphModel.getElement(child)
-                self.recurseNodesCreateDeps(child, compareElement, elementCompareGraphModel,
-                                            easCreated, "B", True)
+                if compareElement:
+                    self.recurseNodesCreateDeps(child, compareElement, elementCompareGraphModel,
+                                                easCreated, "B", True)
 
-    def compareElement(self, thisElement, eOther: 'SElement', compMod: 'SGraph',
-                       compareElement: 'SElement', compareDeps: bool, aSide: str, bSide: str,
-                       createdDeps: list, removedDeps: list):
+    def compareElement(
+        self,
+        thisElement: SElement,
+        eOther: SElement,
+        compMod: SGraph,
+        compareElement: SElement,
+        compareDeps: bool,
+        aSide: str,
+        bSide: str,
+        createdDeps: list,
+        removedDeps: list,
+    ):
         cElem = compMod.createOrGetElement(thisElement)
         if aSide == 'B':
             cElem.attrs.update(thisElement.attrs)
@@ -163,7 +187,7 @@ class ModelCompare:
             cElem.attrs.update(eOther.attrs)
 
         childDiff = False
-        handled = set()  # Elements
+        handled: set[SElement] = set()  # Elements
         changecount = 0
         if thisElement.children is not None and len(thisElement.children) != 0:
             for childOfThis in thisElement.children:
@@ -174,10 +198,11 @@ class ModelCompare:
                     child = cElem.getChildByName(childOfThis.name)
 
                 eChild = eOther.getChildByName(childOfThis.name)
-                handled.add(eChild)
                 if cElem.attrs is None:
                     cElem.initalizeAttributes()
-                if eChild is not None:
+
+                if child is not None and eChild is not None:
+                    handled.add(eChild)
                     if aSide == 'A' and not eChild.equalsAttributes(childOfThis):
                         attrDiff, change_count = self.compareAttrs(childOfThis.attrs,
                                                                    eChild.attrs, child.attrs,
@@ -187,7 +212,14 @@ class ModelCompare:
                         child.attrs.update(eChild.attrs)
                         if change_count > 0:
                             if CompareGraphAttrs.CHANGE_COUNT in child.attrs:
-                                child.attrs[CompareGraphAttrs.CHANGE_COUNT] += change_count
+                                attr = child.attrs[CompareGraphAttrs.CHANGE_COUNT]
+                                if isinstance(attr, int):
+                                    attr += change_count
+                                    child.attrs[CompareGraphAttrs.CHANGE_COUNT] = attr
+                                else:
+                                    raise Exception(
+                                        'Unexpected situation in compareElement, CHANGE_COUNT not int..'
+                                    )
                             else:
                                 child.attrs[CompareGraphAttrs.CHANGE_COUNT] = change_count
 
@@ -197,8 +229,9 @@ class ModelCompare:
 
                 else:
                     childDiff = True
-                    self.recurseNodesMarkInexisting(childOfThis, child, createdDeps, removedDeps,
-                                                    aSide)
+                    if child is not None:
+                        self.recurseNodesMarkInexisting(childOfThis, child, createdDeps,
+                                                        removedDeps, aSide)
             if eOther.children is not None:
                 for othrChild in eOther.children:
                     if othrChild not in handled:
@@ -243,20 +276,30 @@ class ModelCompare:
         return changecount
 
     @staticmethod
-    def tagChangeCount(compareElement, changecount):
+    def tagChangeCount(compareElement: SElement, changecount: int):
         if changecount > 0:
             if compareElement.attrs is not None and CompareGraphAttrs.CHANGE_COUNT in \
                     compareElement.attrs:
                 val = compareElement.attrs[CompareGraphAttrs.CHANGE_COUNT]
-                compareElement.attrs[CompareGraphAttrs.CHANGE_COUNT] = changecount + val
+                if isinstance(val, int):
+                    compareElement.attrs[CompareGraphAttrs.CHANGE_COUNT] = changecount + val
+                else:
+                    raise Exception(
+                        'Unexpected situation in tagChangeCount, CHANGE_COUNT not int..')
             else:
                 if compareElement.attrs is None:
                     compareElement.attrs = {}
                 compareElement.attrs[CompareGraphAttrs.CHANGE_COUNT] = changecount
 
     @staticmethod
-    def compareDeps(compareElem: SElement, element: SElement, eOther, createdDeps, removedDeps,
-                    aSide):
+    def compareDeps(
+        compareElem: SElement,
+        element: SElement,
+        eOther: SElement | None,
+        createdDeps: list[SElementAssociation],
+        removedDeps: list[SElementAssociation],
+        aSide: str,
+    ):
         if element.outgoing is not None and len(element.outgoing) > 0:
             if eOther is not None and eOther.outgoing is not None and len(eOther.outgoing) > 0:
                 if aSide == "A":
@@ -289,9 +332,14 @@ class ModelCompare:
                 return 0
 
     @staticmethod
-    def checkAssocLists(outgoing1, outgoing2, createdDeps, removedDeps):
-        codes1 = {}
-        codes2 = {}
+    def checkAssocLists(
+        outgoing1: list[SElementAssociation],
+        outgoing2: list[SElementAssociation],
+        createdDeps: list[SElementAssociation],
+        removedDeps: list[SElementAssociation],
+    ):
+        codes1: dict[int, SElementAssociation] = {}
+        codes2: dict[int, SElementAssociation] = {}
         for association in outgoing1:
             to = association.toElement.getPath()
             codes1[hash(to) + hash(association.deptype)] = association
@@ -311,13 +359,23 @@ class ModelCompare:
                 changeCount += 1
             return changeCount
 
-    def recurseNodesCreateDeps(self, thisElem: SElement, compareElem: SElement,
-                               elementCompareGraphModel: SGraph, easR: set, val: str,
-                               avoidOverlap: bool):
+    def recurseNodesCreateDeps(
+        self,
+        thisElem: SElement,
+        compareElem: SElement,
+        elementCompareGraphModel: SGraph,
+        easR: set,
+        val: str,
+        avoidOverlap: bool,
+    ):
         if thisElem.outgoing is not None:
             for association in thisElem.outgoing:
                 to = association.toElement
                 cme = elementCompareGraphModel.getElement(to)
+
+                if cme is None:
+                    raise Exception('Unexpected situation in recurseNodesCreateDeps, cme is None..')
+
                 if association in easR:
                     ea2 = SElementAssociation(compareElem, cme, association.deptype)
                     ea2.initElems()
@@ -354,11 +412,19 @@ class ModelCompare:
 
         if thisElem.children is not None:
             for x in thisElem.children:
-                self.recurseNodesCreateDeps(x, compareElem.getChildByName(x.name),
-                                            elementCompareGraphModel, easR, val, avoidOverlap)
+                compareChild = compareElem.getChildByName(x.name)
+                if compareChild is not None:
+                    self.recurseNodesCreateDeps(x, compareChild, elementCompareGraphModel, easR,
+                                                val, avoidOverlap)
 
-    def recurseNodesMarkInexisting(self, thisElem: SElement, compModItem: SElement, createdDeps,
-                                   removedDeps, strModel: str):
+    def recurseNodesMarkInexisting(
+        self,
+        thisElem: SElement,
+        compModItem: SElement,
+        createdDeps: list[SElementAssociation],
+        removedDeps: list[SElementAssociation],
+        strModel: str,
+    ):
         changecount = 0
         compModItem.attrs['_only_in'] = strModel
         for child in thisElem.children:

@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import os
 import sys
 
-from sgraph.loader.attributeloader import AttributeLoader
 from sgraph import SGraph
+from sgraph.loader.attributeloader import AttributeLoader
 
 
 class ModelLoader:
@@ -10,8 +12,12 @@ class ModelLoader:
         pass
 
     # noinspection PyMethodMayBeStatic
-    def load_model(self, filepath: str, dep_types: list = None,
-                   ignored_attributes: list = None) -> SGraph:
+    def load_model(
+        self,
+        filepath: str,
+        dep_types: list[str] | None = None,
+        ignored_attributes: list[str] | None = None,
+    ) -> SGraph:
         """
         Loads model and its attribute files.
         When returning model and [None], it means that the model path did not match to the usual
@@ -26,8 +32,6 @@ class ModelLoader:
         :return: the model SGraph object
         """
         ignored_attributes = ignored_attributes or []
-
-        extracted_paths = []
 
         if dep_types is None:
             dep_types = ['IGNORE dynamic_function_ref', 'IGNORE dynamic_typeref_member']
@@ -46,23 +50,23 @@ class ModelLoader:
             filepath_of_model_root = filepath.replace('/dependency/modelfile.xml.zip', '').replace(
                 '/dependency/modelfile.xml', '')
             a = AttributeLoader()
-            model, missing_attr_files = a.load_all_files(model, filepath_of_model_root, ignored_attributes)
+            model, missing_attr_files = a.load_all_files(model, filepath_of_model_root,
+                                                         ignored_attributes)
 
             for missing in missing_attr_files:
                 if missing != 'attr_temporary.csv':
                     sys.stderr.write('warning: cannot load default attribute file when loading the '
                                      'model for data mining. missing: ' + missing + '\n')
 
-        for extracted_path in extracted_paths:
-            if os.path.exists(extracted_path):
-                os.remove(extracted_path)
-            else:
-                print('model_loader.py: XML file already deleted by other process: ' +
-                      extracted_path)
         return model
 
     # noinspection PyMethodMayBeStatic
-    def load_attributes(self, model: SGraph, filepath: str, ignored_attributes: list = None) -> SGraph:
+    def load_attributes(
+        self,
+        model: SGraph,
+        filepath: str,
+        ignored_attributes: list[str] | None = None,
+    ) -> SGraph:
         """
         Loads attribute files of a model.
         When returning model and [None], it means that the model path did not match to the usual
@@ -82,7 +86,8 @@ class ModelLoader:
         filepath_of_model_root = filepath.replace('/dependency/modelfile.xml.zip', '').replace(
             '/dependency/modelfile.xml', '')
         a = AttributeLoader()
-        model, missing_attr_files = a.load_all_files(model, filepath_of_model_root, ignored_attributes)
+        model, missing_attr_files = a.load_all_files(model, filepath_of_model_root,
+                                                     ignored_attributes)
 
         for missing in missing_attr_files:
             if missing != 'attr_temporary.csv':

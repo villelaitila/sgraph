@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import re
 import sys
@@ -9,13 +11,13 @@ Use like this:
 
  Or to show main element
 
- python3 show_model.py |grep -v /NetflixOSS/External |python3 filter_deps.py --pattern-from /\\w+/\\w+ 
+ python3 show_model.py |grep -v /NetflixOSS/External |python3 filter_deps.py --pattern-from /\\w+/\\w+
      --pattern-to /\\w+/\\w+ --equation a!=b --deps-only
 
 """
 
 
-def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
+def dofiltering(pattern_from: str, pattern_to: str, equation: str, deps_only: bool, debug: bool):
     """Filter dependencies"""
     pfrom = None
     pto = None
@@ -54,13 +56,17 @@ def dofiltering(pattern_from, pattern_to, equation, deps_only, debug):
                             sys.stderr.write('Skip line, compare: missing match objects.\n')
                         continue
 
-                if equation == 'a==b' and from_m.group(0) == to_m.group(0):
-                    pass
-                elif equation == 'a!=b' and from_m.group(0) != to_m.group(0):
-                    pass
+                    if equation == 'a==b' and from_m.group(0) == to_m.group(0):
+                        pass
+                    elif equation == 'a!=b' and from_m.group(0) != to_m.group(0):
+                        pass
+                    else:
+                        if debug:
+                            sys.stderr.write('Skip line, Condition failed\n')
+                        continue
                 else:
                     if debug:
-                        sys.stderr.write('Skip line, Condition failed\n')
+                        sys.stderr.write('Skip line, Unknown equation\n')
                     continue
 
             print(depline)

@@ -1,4 +1,6 @@
-from sgraph import SGraph
+from __future__ import annotations
+
+from sgraph import SElement, SGraph
 from sgraph.attributes import attributequeries
 
 
@@ -6,7 +8,7 @@ class MetricsApi:
     def __init__(self):
         pass
 
-    def get_total_loc_metrics(self, modeldir):
+    def get_total_loc_metrics(self, modeldir: str) -> dict[str, int | float]:
         """
         Get total LOC metrics describing one model,
         such as "loc" (lines of code) and "avg_file_loc" (average code file size).
@@ -17,7 +19,7 @@ class MetricsApi:
 
         :return: Returns data like {'loc': 1203, 'avg_file_loc': 123.3040840}
         """
-        columns, entries = attributequeries.read_attrs_generic(
+        columns, entries = attributequeries.read_attrs_generic(  # type: ignore
             modeldir + '/content/loc/attr_loc_propagated.csv')
         total_loc = 0
         for filepath, attrs in entries:
@@ -35,7 +37,7 @@ class MetricsApi:
 
         return {'loc': total_loc, 'avg_file_loc': avg_loc}
 
-    def get_total_tech_debt_metrics(self, modeldir):
+    def get_total_tech_debt_metrics(self, modeldir: str) -> dict[str, int | float]:
         """
         Get tech debt metrics describing one model,
         such as "tech_debt_markers_count" (how many FIXMEs etc in code).
@@ -63,8 +65,7 @@ class MetricsApi:
 
         return {'tech_debt_markers_count': c, 'tech_debt_density': d}
 
-
-    def get_tech_debt_metrics(self, model):
+    def get_tech_debt_metrics(self, model: SGraph) -> dict[str, dict[str, list[int | float]]]:
         """
         Get tech debt metrics describing one model,
         such as "tech_debt_markers_count" (how many FIXMEs etc in code).
@@ -72,8 +73,7 @@ class MetricsApi:
         :param model: graph model
         :return: Returns data like {'tech_debt_markers_count': 1203}
         """
-
-        def populate_tech_debt_markers_count(x):
+        def populate_tech_debt_markers_count(x: SElement):
             if 'tech_debt_markers_count' in x.attrs:
                 if len(x.children) > 0:
                     bd = {}
@@ -110,7 +110,7 @@ class MetricsApi:
         density = {}
 
         for c in model.rootNode.children:
-            markers[c.name] = populate_tech_debt_density(c)
+            density[c.name] = populate_tech_debt_density(c)
 
         return {'tech_debt_markers_count': markers, 'tech_debt_density': density}
 
@@ -135,11 +135,17 @@ class MetricsApi:
                 if name in e.attrs:
                     if isinstance(e.attrs[name], str):
                         try:
-                            value = float(e.attrs[name])
+                            attr_value = e.attrs[name]
+                            if isinstance(attr_value, list):
+                                raise Exception('Invalid attribute type')
+                            value = float(attr_value)
                             found = True
                         except ValueError:
                             try:
-                                value = int(e.attrs[name])
+                                attr_value = e.attrs[name]
+                                if isinstance(attr_value, list):
+                                    raise Exception('Invalid attribute type')
+                                value = int(attr_value)
                                 found = True
                             except ValueError:
                                 pass
@@ -153,10 +159,16 @@ class MetricsApi:
             raise Exception('Not implemented')
 
 
-def get_loc_or_testcode_loc(e):
-    loc = 0
+def get_loc_or_testcode_loc(e: SElement):
+    loc: int = 0
     if 'loc' in e.attrs:
-        loc += e.attrs['loc']
+        attr_value = e.attrs['loc']
+        if isinstance(attr_value, list):
+            raise Exception('Invalid attribute type')
+        loc += int(attr_value)
     if 'testcode_loc' in e.attrs:
-        loc += e.attrs['testcode_loc']
+        attr_value = e.attrs['testcode_loc']
+        if isinstance(attr_value, list):
+            raise Exception('Invalid attribute type')
+        loc += int(attr_value)
     return loc

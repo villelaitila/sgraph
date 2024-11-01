@@ -1,27 +1,28 @@
 """
 Filter graph by removing some content of it using some of remove_* functions.
 """
+from __future__ import annotations
 
-from sgraph import SGraph
+from sgraph import SElement, SElementAssociation, SGraph
 
 
 class SGraphFiltering:
     @staticmethod
-    def remove_dependencies_by_deptypes(model: SGraph, dep_types_to_remove):
+    def remove_dependencies_by_deptypes(model: SGraph, dependency_types_to_remove: list[str]):
         """
         Remove dependencies
         :param model:
-        :param dep_types_to_remove:
+        :param dependency_types_to_remove:
         :return:
         """
-        dep_types_to_remove = set(dep_types_to_remove)
+        dep_types_to_remove = set(dependency_types_to_remove)
 
-        def remove(elem):
+        def remove(elem: SElement):
             """
             :param elem:
             :return:
             """
-            remove_eas = []
+            remove_eas: list[SElementAssociation] = []
             for association in elem.outgoing:
                 matched = False
                 for d in dep_types_to_remove:
@@ -45,23 +46,26 @@ class SGraphFiltering:
         :param to_path: to element path
         :return:
         """
-        e1 = model.findElementFromPath(from_path)
-        e2 = model.findElementFromPath(to_path)
-        remove_assocs_list = []
+        from_elem = model.findElementFromPath(from_path)
+        to_elem = model.findElementFromPath(to_path)
+        remove_assocs_list: list[SElementAssociation] = []
 
-        def remove_eas(elem):
+        if from_elem is None or to_elem is None:
+            return
+
+        def remove_eas(elem: SElement):
             for association in elem.outgoing:
 
-                if association.toElement == e2 or association.toElement.isDescendantOf(e2):
+                if association.toElement == to_elem or association.toElement.isDescendantOf(
+                        to_elem):
                     remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
-        if e1 is not None:
-            remove_eas(e1)
-            for r in remove_assocs_list:
-                r.remove()
+        remove_eas(from_elem)
+        for r in remove_assocs_list:
+            r.remove()
 
     @staticmethod
     def remove_dependencies_by_from_path(model: SGraph, from_path: str):
@@ -75,21 +79,21 @@ class SGraphFiltering:
         if from_elem is None:
             return
 
-        remove_assocs_list = []
+        remove_assocs_list: list[SElementAssociation] = []
 
-        def remove_eas(elem):
+        def remove_eas(elem: SElement):
             for association in elem.outgoing:
 
-                if association.toElement != from_elem or association.toElement.isDescendantOf(from_elem):
+                if association.toElement != from_elem or association.toElement.isDescendantOf(
+                        from_elem):
                     remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
-        if from_elem is not None:
-            remove_eas(from_elem)
-            for r in remove_assocs_list:
-                r.remove()
+        remove_eas(from_elem)
+        for r in remove_assocs_list:
+            r.remove()
 
     @staticmethod
     def remove_dependencies_by_to_path(model: SGraph, to_path: str):
@@ -103,18 +107,17 @@ class SGraphFiltering:
         if to_elem is None:
             return
 
-        remove_assocs_list = []
+        remove_assocs_list: list[SElementAssociation] = []
 
-        def remove_eas(elem):
+        def remove_eas(elem: SElement):
             for association in elem.incoming:
-                if (association.fromElement != to_elem or
-                        association.fromElement.isDescendantOf(to_elem)):
+                if (association.fromElement != to_elem
+                        or association.fromElement.isDescendantOf(to_elem)):
                     remove_assocs_list.append(association)
 
             for c in elem.children:
                 remove_eas(c)
 
-        if to_elem is not None:
-            remove_eas(to_elem)
-            for r in remove_assocs_list:
-                r.remove()
+        remove_eas(to_elem)
+        for r in remove_assocs_list:
+            r.remove()

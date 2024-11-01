@@ -1,17 +1,18 @@
+from __future__ import annotations
+
 import math
 import os
 
-from sgraph.attributes import attributequeries
 from sgraph import SGraph
+from sgraph.attributes import attributequeries
 
 
 class AttributeLoader:
-
     def __init__(self):
         pass
 
     # noinspection PyMethodMayBeStatic
-    def load_attrfile(self, filepath, model: SGraph, ignored_attributes: list[str]):
+    def load_attrfile(self, filepath: str, model: SGraph, ignored_attributes: list[str]):
         columns, entries = attributequeries.read_attrs_generic(filepath)
         for elem_path, attrs in entries:
             if isinstance(elem_path, int):
@@ -28,15 +29,20 @@ class AttributeLoader:
 
         return model
 
-    def load_all_files(self, model, filepath_of_model_root, ignored_attributes):
+    def load_all_files(
+        self,
+        model: SGraph,
+        filepath_of_model_root: str,
+        ignored_attributes: list[str],
+    ):
 
-        attrfiles = ['attr_temporary.csv', 'git/attr_git_propagated.csv',
-                     'git/attr_analysis_state.csv', 'content/loc/attr_loc_propagated.csv',
-                     'content/loc/attr_testcode_loc_propagated.csv',
-                     'content/loc/attr_languages.csv', 'content/attr_licenses.csv',
-                     'attr_issue_propagated.csv', 'content/attr_risk_level.csv',
-                     'content/attr_pmd.csv']
-        attribute_files_missing = []
+        attrfiles = [
+            'attr_temporary.csv', 'git/attr_git_propagated.csv', 'git/attr_analysis_state.csv',
+            'content/loc/attr_loc_propagated.csv', 'content/loc/attr_testcode_loc_propagated.csv',
+            'content/loc/attr_languages.csv', 'content/attr_licenses.csv',
+            'attr_issue_propagated.csv', 'content/attr_risk_level.csv', 'content/attr_pmd.csv'
+        ]
+        attribute_files_missing: list[str] = []
         for attrfile in attrfiles:
             fullpath = filepath_of_model_root + '/' + attrfile + '.zip'
             if os.path.exists(fullpath) and os.path.isfile(fullpath):
