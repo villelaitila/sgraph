@@ -629,7 +629,6 @@ class SElement:
         return p
 
     def equalsAttributes(self, e: "SElement") -> bool:
-        #! Does this work correctly?
         return self.attrs == e.attrs
 
     def createAttributesFrom(self, attrs: dict[str, str | int | list[str]]):

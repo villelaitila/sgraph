@@ -736,7 +736,6 @@ class SGraph:
                 if self.currentElement is None:
                     raise Exception('Current element is None')
 
-                #! TODO: Check if this and the translation change thing works
                 # HACK: This is probably not the best way to handle this
                 to = SElement(None, i)
                 to.addAttribute("translate", "1")
