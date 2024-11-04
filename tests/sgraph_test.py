@@ -1,7 +1,6 @@
 import copy
 import os
 
-from sgraph import SGraph, ModelApi
 from sgraph.loader import ModelLoader
 
 MODELFILE = 'modelfile.xml'

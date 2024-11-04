@@ -79,9 +79,9 @@ class MetricsApi:
                     bd = {}
                     for c in x.children:
                         bd[c.name] = populate_tech_debt_markers_count(c)
-                    return [int(x['tech_debt_markers_count']), bd]
+                    return [int(x.attrs['tech_debt_markers_count']), bd]
                 else:
-                    return [int(x['tech_debt_markers_count'])]
+                    return [int(x.attrs['tech_debt_markers_count'])]
             else:
                 return [0]
 

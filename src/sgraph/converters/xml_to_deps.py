@@ -7,7 +7,7 @@ outfilepath = None
 if len(sys.argv) > 2:
     outfilepath = sys.argv[2]
 
-egm = SGraph.parse_xml(inputfilepath)
+egm = SGraph.parse_xml_or_zipped_xml(inputfilepath)
 
 if outfilepath:
     print('Node count: {}'.format(egm.rootNode.getNodeCount()))

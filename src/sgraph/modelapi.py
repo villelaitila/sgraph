@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import functools
-from typing import Callable
+from typing import Callable, Sequence
 
 from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.definitions import FilterAssocations, HaveAttributes
@@ -17,7 +17,7 @@ class ModelApi:
         model: SGraph | None = None,
     ):
         if filepath:
-            self.model = SGraph.parse_xml(filepath)
+            self.model = SGraph.parse_xml_or_zipped_xml(filepath)
         elif model:
             self.model = model
         else:
@@ -140,7 +140,7 @@ class ModelApi:
         return found
 
     @functools.lru_cache(maxsize=None)
-    def matches_with_descendant(self, elem: SElement, potential_ancestors_list: list[SElement]):
+    def matches_with_descendant(self, elem: SElement, potential_ancestors_list: Sequence[SElement]):
         # NOTE: LRU CACHE NEEDS TO BE CLEARED IF THE MODEL IS CHANGED!
         for potential_ancestor in potential_ancestors_list:
             if elem.isDescendantOf(potential_ancestor):
