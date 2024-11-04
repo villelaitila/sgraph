@@ -25,45 +25,7 @@ from xml.sax.xmlreader import AttributesImpl
 
 from .selement import SElement
 from .selementassociation import SElementAssociation
-
-
-def addEA(deptype: str, info: str | None, id1: str, id2: str, egm: "SGraph") -> SElementAssociation:
-    e1 = None
-    if not id1.startswith('generate dependency'):
-        e1 = egm.createOrGetElementFromPath(id1)
-    e2 = None
-    if not id2.startswith('generate dependency'):
-        e2 = egm.createOrGetElementFromPath(id2)
-
-    if e1 is None or e2 is None:
-        raise ValueError(
-            f"Could not find elements for dependency {deptype} between {id1} and {id2}")
-
-    if info is not None and len(info) > 0:
-        new_ea = SElementAssociation(e1, e2, deptype, {'detail': info})
-    else:
-        new_ea = SElementAssociation(e1, e2, deptype, {})
-    new_ea.initElems()
-    return new_ea
-
-
-def find_assocs_between(
-    e_orig: SElement,
-    e: SElement,
-    elems: list[SElement],
-) -> set[tuple[SElement, SElement]]:
-    elem_tuples: set[tuple[SElement, SElement]] = set()
-    for out in e.outgoing:
-        for elem in elems:
-            if out.toElement.isDescendantOf(elem):
-                elem_tuples.add((e_orig, elem))
-    for child in e.children:
-        elem_tuples.update(find_assocs_between(e_orig, child, elems))
-    return elem_tuples
-
-
-class ParsingIntentionallyAborted(Exception):
-    pass
+from .sgraph_utils import ParsingIntentionallyAborted, addEA, find_assocs_between
 
 
 class SGraph:
@@ -546,32 +508,13 @@ class SGraph:
         return delta
 
     @staticmethod
-    def parse_xml_or_zipped_xml(
-        model_file_path: str,
-        type_rules: list[str] | None = None,
-        ignored_attributes: list[str] | None = None,
-        only_root: bool = False,
-    ):
-        if '.xml.zip' in model_file_path:
-            with open(model_file_path, 'rb') as filehandle:
-                zfile = zipfile.ZipFile(filehandle)
-                data = zfile.open(zfile.namelist()[0], 'r')
-                data = io.TextIOWrapper(data)
-                zfile.close()
-                m = SGraph.parse_xml(data, type_rules, ignored_attributes, only_root)
-                m.set_model_path(model_file_path)
-        else:
-            m = SGraph.parse_xml(model_file_path, type_rules, ignored_attributes, only_root)
-            m.set_model_path(model_file_path)
-        return m
-
-    @staticmethod
-    def parse_xml(
+    def __parse_xml(
         filename_or_stream: str | io.TextIOWrapper,
         type_rules: list[str] | None = None,
-        ignored_attributes: list[str] | None = None,
+        elem_attribute_filters: list[str] | None = None,
         only_root: bool = False,
         parse_string: bool = False,
+        assoc_attribute_filters: list[str] | None = None
     ):
         class SGraphXMLParser(xml.sax.handler.ContentHandler):
             node: int
@@ -608,10 +551,19 @@ class SGraph:
 
                 self.acceptableAssocTypes = None
                 self.ignoreAssocTypes = None
-                self.ignored_attributes = ignored_attributes or []
+
+                self.ignore_all_associations = False
                 self.only_root = only_root
 
-            def set_type_rules(self, type_rules: list[str] | None):
+                self.whitelisted_elem_attributes = None
+                self.blacklisted_elem_attributes = []
+                self.ignore_all_elem_attributes = False
+
+                self.whitelisted_assoc_attributes = None
+                self.blacklisted_assoc_attributes = []
+                self.ignore_all_assoc_attributes = False
+
+            def set_type_rules(self, type_rules: list[str]):
                 if type_rules is None:
                     self.acceptableAssocTypes = None
                     self.ignoreAssocTypes = None
@@ -621,37 +573,91 @@ class SGraph:
                         if type_rule.strip().startswith('IGNORE '):
                             if self.ignoreAssocTypes is None:
                                 self.ignoreAssocTypes = set()
-                            self.ignoreAssocTypes.add(type_rule[7:].strip())
+
+                            t = type_rule[7:].strip()
+                            if t == '*':
+                                self.ignore_all_associations = True
+                            else:
+                                self.ignoreAssocTypes.add(t)
                         else:
                             if self.acceptableAssocTypes is None:
                                 self.acceptableAssocTypes = set()
                             self.acceptableAssocTypes.add(type_rule)
 
-            def startElement(self, name: str, attrs: AttributesImpl):
+            def set_attribute_rules(self, elem_attribute_filters,
+                                    assoc_attribute_filters: list[str]):
+                if elem_attribute_filters is not None:
+                    for attr_rule in elem_attribute_filters:
+                        a = attr_rule.strip()
+                        if a.strip().startswith('IGNORE '):
+                            if self.blacklisted_elem_attributes is None:
+                                self.blacklisted_elem_attributes = set()
 
-                if self.node % 5000 == 0 and self.node > 0:
-                    # print(('parsing.. currently '+str(self.node)))
-                    self.buffer = ''
-                if name == 'a':
-                    element_name = attrs.get('n')
-                    value = attrs.get('v')
-                    if not element_name or not value:
-                        return
-                    if self.currentRelation is not None:
-                        self.currentRelation[element_name] = value
-                    else:
-                        if self.currentElement is not None and self.currentElementPath is not None and len(
-                                self.currentElementPath) > 0:
-                            self.property += 1
-                            if element_name not in self.ignored_attributes:
-                                self.currentElement.addAttribute(element_name, value)
+                            t = a[7:].strip()
+                            if t == '*':
+                                self.ignore_all_elem_attributes = True
+                            else:
+                                self.blacklisted_elem_attributes.add(t)
                         else:
-                            print(('discarding ' + element_name + ' ' + value + ' name value pair'))
+                            if a != '*':
+                                if self.whitelisted_elem_attributes is None:
+                                    self.whitelisted_elem_attributes = set()
+                                self.whitelisted_elem_attributes.add(a)
+                if assoc_attribute_filters is not None:
+                    for attr_rule in assoc_attribute_filters:
+                        a = attr_rule.strip()
+                        if a.strip().startswith('IGNORE '):
+                            if self.blacklisted_assoc_attributes is None:
+                                self.blacklisted_assoc_attributes = set()
 
-                elif name == 'e':
-                    element_name = attrs.get('n')
-                    if not element_name:
+                            t = a[7:].strip()
+                            if t == '*':
+                                self.ignore_all_assoc_attributes = True
+                            else:
+                                self.blacklisted_assoc_attributes.add(t)
+                        else:
+                            if a != '*':
+                                if self.whitelisted_assoc_attributes is None:
+                                    self.whitelisted_assoc_attributes = set()
+                                self.whitelisted_assoc_attributes.add(a)
+
+            def startElement(self, tag_name: str, attrs: AttributesImpl):
+
+                # if self.node % 5000 == 0 and self.node > 0:
+                # print(('parsing.. currently '+str(self.node)))
+                #    self.buffer = ''
+
+                if tag_name == 'a':
+                    if self.ignore_all_elem_attributes and self.ignore_all_assoc_attributes:
                         return
+                    name = attrs.get('n')
+
+                    if self.currentRelation is not None:
+                        if name in self.blacklisted_assoc_attributes:
+                            return
+                        if self.whitelisted_assoc_attributes:
+                            if name not in self.whitelisted_assoc_attributes:
+                                return
+
+                        value = attrs.get('v')
+                        self.currentRelation[name] = value
+                    else:
+                        if self.currentElement is not None and len(self.currentElementPath) > 0:
+                            if name in self.blacklisted_elem_attributes:
+                                return
+                            if self.whitelisted_elem_attributes:
+                                if name not in self.whitelisted_elem_attributes:
+                                    return
+
+                            self.property += 1
+                            value = attrs.get('v')
+                            self.currentElement.addAttribute(name, value)
+                        else:
+                            val = attrs.get('v')
+                            sys.stderr.write(f' discarding {name} {val} attrs, no element to assign the data\n')
+
+                elif tag_name == 'e':
+                    element_name = attrs.get('n')
 
                     if len(self.idstack) == 0:
                         e = SElement(self.rootNode, element_name)
@@ -670,13 +676,20 @@ class SGraph:
                             self.property += 1
                         elif aname == 'i':
                             self.id_to_elem_map[avalue] = e
-                        elif aname != 'n' and aname not in self.ignored_attributes:
-                            e.addAttribute(aname, avalue)
+                        elif aname != 'n':
+                            if not self.ignore_all_elem_attributes:
+                                if not aname in self.blacklisted_elem_attributes:
+                                    if self.whitelisted_elem_attributes:
+                                        if aname in self.whitelisted_elem_attributes:
+                                            e.addAttribute(aname, avalue)
+                                    else:
+                                        e.addAttribute(aname, avalue)
+
 
                     if self.only_root:
                         raise ParsingIntentionallyAborted('Aborted intentionally')
 
-                elif name == 'r':
+                elif tag_name == 'r':
                     self.currentRelation = {}
                     referred = attrs.get('r')
                     t = attrs.get('t')
@@ -717,14 +730,17 @@ class SGraph:
                     self.currentRelation = None
 
             def createReference(self, i: str, t: str | None):
-                if self.acceptableAssocTypes is None and self.ignoreAssocTypes is not None:
-                    if t and t in self.ignoreAssocTypes:
+                if self.ignore_all_associations:
+                    return
+                elif self.acceptableAssocTypes is None and self.ignoreAssocTypes is not None:
+                    if t in self.ignoreAssocTypes:
                         return
                 elif self.acceptableAssocTypes is None:
                     pass  # all is fine
                 elif t and t in self.acceptableAssocTypes:
                     pass  # ok
-                elif len(self.acceptableAssocTypes) == 0:
+                elif (self.acceptableAssocTypes is not None and
+                      len(self.acceptableAssocTypes) == 0):
                     # do not accept any deps
                     return
                 else:
@@ -762,9 +778,10 @@ class SGraph:
         parser = xml.sax.make_parser()
         a = SGraphXMLParser()
         a.set_type_rules(type_rules)
+        a.set_attribute_rules(elem_attribute_filters, assoc_attribute_filters)
         parser.setContentHandler(a)
         if isinstance(filename_or_stream, str) and not parse_string:
-            filepath = filename_or_stream
+            filepath: str = filename_or_stream
             if os.path.exists(filepath):
                 try:
                     parser.parse(filepath)  # type: ignore
@@ -788,14 +805,51 @@ class SGraph:
         return graph
 
     @staticmethod
-    def parse_xml_string(
-        xml_string: str,
-        type_rules: list[str] | None = None,
-        ignored_attributes: list[str] | None = None,
-        only_root: bool = False,
+    def parse_xml_or_zipped_xml(
+                model_file_path: str,
+                type_rules: list[str]=None,
+                elem_attribute_filters: list[str]=None,
+                only_root: bool=False,
+                assoc_attribute_filters: list[str]=None
     ):
-        return SGraph.parse_xml(xml_string, type_rules, ignored_attributes, only_root,
-                                parse_string=True)
+        if isinstance(model_file_path, str) and '.xml.zip' in model_file_path:
+            with open(model_file_path, 'rb') as filehandle:
+                zfile = zipfile.ZipFile(filehandle)
+                data = zfile.open(zfile.namelist()[0], 'r')
+                data = io.TextIOWrapper(data)
+                zfile.close()
+                m = SGraph.parse_xml_file_or_stream(data, type_rules,
+                                       elem_attribute_filters, only_root,
+                                       assoc_attribute_filters)
+                m.set_model_path(model_file_path)
+        else:
+            m = SGraph.__parse_xml(model_file_path,
+                                                type_rules,  elem_attribute_filters,
+                                                only_root,  False, assoc_attribute_filters)
+            m.set_model_path(model_file_path)
+        return m
+
+    @staticmethod
+    def parse_xml_file_or_stream(filename_or_stream: io.TextIOWrapper | str,
+                                 type_rules: list[str]=None,
+                                 elem_attribute_filters: list[str]=None,
+                                 only_root: bool=False,
+                                 assoc_attribute_filters: list[str]=None):
+            return SGraph.__parse_xml(filename_or_stream, type_rules,
+                             elem_attribute_filters, only_root, False,
+                             assoc_attribute_filters)
+
+    @staticmethod
+    def parse_xml_string(xml_string: str,
+                         type_rules: list[str] | None = None,
+                         elem_attribute_filters: list[str] | None = None,
+                         only_root: bool = False,
+                         assoc_attribute_filters: list[str] | None=None):
+        return SGraph.__parse_xml(xml_string, type_rules,
+                                elem_attribute_filters,
+                                only_root, True,
+                                assoc_attribute_filters)
+
 
     @staticmethod
     def parse_deps(filename: str):
@@ -803,7 +857,7 @@ class SGraph:
             return SGraph.parse_deps_lines(fn)
 
     @staticmethod
-    def parse_deps_lines(content: io.TextIOWrapper):
+    def parse_deps_lines(content: TextIO):
         TAGLEN = len('<NEWLINE>')
         modelAttrs: dict[str, str | dict[str, str]] = {}
         metaAttrs: dict[str, dict[str, str]] = {}

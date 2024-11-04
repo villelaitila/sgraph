@@ -8,7 +8,7 @@ MODEL_PATH = '/nginx/src/core/'
 MODELFILE = 'modelfile.xml'
 
 # Helper for creating the model and model api
-def get_model_and_model_api(file_name):
+def get_model_and_model_api(file_name: str):
     dirname = os.path.dirname(__file__)
     filename = os.path.join(dirname, file_name)
     modelLoader = ModelLoader()

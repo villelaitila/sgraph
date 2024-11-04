@@ -60,6 +60,15 @@ class SElement:
         self.attrs = {}
         # self.num = '0'
 
+    def __str__(self):
+        children_info = str(len(self.children)) + 'C'
+        inbound_info = str(len(self.incoming)) + 'I'
+        outbound_info = str(len(self.outgoing)) + 'O'
+        if self.parent is not None:
+            return self.name + ' under ' + self.parent.name + ' ' + children_info + ' ' + outbound_info + ' ' + inbound_info
+        else:
+            return self.name + ' ' + children_info + ' ' + outbound_info + ' ' + inbound_info
+
     def addChild(self, child: "SElement"):
         """
         Add child, but if there is an overlapping element, merge instead and return merged element.

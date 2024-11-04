@@ -47,7 +47,7 @@ def extract_and_load(analysis_target_name: str, output_dir: str):
         data = zfile.open(file_name, 'r')
         data = io.TextIOWrapper(data)
         zfile.close()
-        graph = SGraph.parse_xml(data)
+        graph = SGraph.parse_xml_file_or_stream(data)
         return graph
 
 
