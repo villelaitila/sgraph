@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import zipfile
 
 from sgraph import ModelApi, SGraph
+from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sgraph_to_cytoscape import graph_to_cyto
 from sgraph.exceptions import ModelNotFoundException
 
@@ -29,7 +31,7 @@ def extract_filtered_subgraph(analysis_target_name: str, output_dir: str, elemen
     elem = graph.createOrGetElementFromPath(element_path)
     if elem:
         # TODO handle also recursion param
-        return ModelApi().filter_model(elem, graph)
+        return ModelApi.filter_model(elem, graph)
     else:
         raise Exception(f'Element path {element_path} not found')
 
@@ -56,6 +58,9 @@ def produce_output(outputformat: str, subg: SGraph):
         return graph_to_cyto(subg)
     elif outputformat == 'softagram':
         return subg.to_xml(None, stdout=False)
+    elif outputformat == 'cyclonedx-bom':
+        model_sbom = sbom_cyclonedx_generator.generate_from_sgraph(subg)
+        return json.dumps(model_sbom, indent=4)
     else:
         raise Exception(f'Unsupported outputformat {outputformat}')
 

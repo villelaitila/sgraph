@@ -28,7 +28,8 @@ class ModelApi:
     def getElementByPath(self, filepath: str):
         return self.egm.findElementFromPath(filepath)
 
-    def getChildrenByType(self, element: SElement, elemType: str):
+    @staticmethod
+    def getChildrenByType(element: SElement, elemType: str):
         return [x for x in element.children if x.typeEquals(elemType)]
 
     def getElementsByName(self, name: str):
@@ -43,19 +44,23 @@ class ModelApi:
         recursiveTraverser(self.egm.rootNode)
         return matching
 
-    def getCalledFunctions(self, funcElem: SElement):
+    @staticmethod
+    def getCalledFunctions(funcElem: SElement):
         functionCalls = [x for x in funcElem.outgoing if x.deptype == 'function_ref']
         return set(map(lambda x: x.toElement, functionCalls))
 
-    def getCallingFunctions(self, funcElem: SElement):
+    @staticmethod
+    def getCallingFunctions(funcElem: SElement):
         functionCalls = [x for x in funcElem.incoming if x.deptype == 'function_ref']
         return set(map(lambda x: x.fromElement, functionCalls))
 
-    def getUsedElements(self, elem: SElement):
+    @staticmethod
+    def getUsedElements(elem: SElement):
         associations = [x for x in elem.outgoing]
         return set(map(lambda x: x.toElement, associations))
 
-    def getUserElements(self, elem: SElement):
+    @staticmethod
+    def getUserElements(elem: SElement):
         associations = [x for x in elem.incoming]
         return set(map(lambda x: x.fromElement, associations))
 
@@ -76,12 +81,12 @@ class ModelApi:
         for cc in c.children:
             self.__filter(cc, filterfunc, matched_elements)
 
+    @staticmethod
     def query_dependencies_between(
-        self,
-        from_elems: list[SElement],
-        to_elems: list[SElement],
-        dep_filter: tuple[str, str, str] | None,
-        prevent_self_deps: bool,
+            from_elems: list[SElement],
+            to_elems: list[SElement],
+            dep_filter: tuple[str, str, str] | None,
+            prevent_self_deps: bool,
     ):
         found: list[SElementAssociation] = []
         for f in from_elems:
@@ -90,24 +95,24 @@ class ModelApi:
             while len(s) > 0:
                 elem = s.pop()
                 for association in elem.outgoing:
-                    if prevent_self_deps and self.matches_with_descendant(
+                    if prevent_self_deps and ModelApi.matches_with_descendant(
                             association.toElement, tuple([f])):
                         pass
                     elif (association.toElement in to_elems
-                          or self.matches_with_descendant(association.toElement, tuple(to_elems))):
-                        self.add_if_matches(association, found, dep_filter)
+                          or ModelApi.matches_with_descendant(association.toElement, tuple(to_elems))):
+                        ModelApi.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     s.append(c)
         return found
 
+    @staticmethod
     def query_dependencies(
-        self,
-        elements: list[SElement],
-        exclude: list[SElement] | None,
-        dep_filter: tuple[str, str, str] | None,
-        direction_is_out: bool,
-        prevent_self_deps: bool,
+            elements: list[SElement],
+            exclude: list[SElement] | None,
+            dep_filter: tuple[str, str, str] | None,
+            direction_is_out: bool,
+            prevent_self_deps: bool,
     ):
         found: list[SElementAssociation] = []
         for f in elements:
@@ -128,19 +133,20 @@ class ModelApi:
                         if not ModelApi.intra_file(association):
                             found.append(association)
 
-                    elif prevent_self_deps and self.matches_with_descendant(other_elem, tuple([f])):
+                    elif prevent_self_deps and ModelApi.matches_with_descendant(other_elem, tuple([f])):
                         pass
 
-                    elif other_elem not in exclude and not self.matches_with_descendant(
+                    elif other_elem not in exclude and not ModelApi.matches_with_descendant(
                             other_elem, tuple(exclude)):
-                        self.add_if_matches(association, found, dep_filter)
+                        ModelApi.add_if_matches(association, found, dep_filter)
 
                 for c in elem.children:
                     stack.append(c)
         return found
 
+    @staticmethod
     @functools.lru_cache(maxsize=None)
-    def matches_with_descendant(self, elem: SElement, potential_ancestors_list: Sequence[SElement]):
+    def matches_with_descendant(elem: SElement, potential_ancestors_list: Sequence[SElement]):
         # NOTE: LRU CACHE NEEDS TO BE CLEARED IF THE MODEL IS CHANGED!
         for potential_ancestor in potential_ancestors_list:
             if elem.isDescendantOf(potential_ancestor):
@@ -155,11 +161,11 @@ class ModelApi:
     def not_a_sibling_ref(ea: SElementAssociation):
         return ea.fromElement.parent != ea.toElement.parent
 
+    @staticmethod
     def add_if_matches(
-        self,
-        ea: SElementAssociation,
-        found: list[SElementAssociation],
-        dep_filter: tuple[str, str, str] | None,
+            ea: SElementAssociation,
+            found: list[SElementAssociation],
+            dep_filter: tuple[str, str, str] | None,
     ):
         if dep_filter is not None:
             if dep_filter[1] == '==' and ea.check_attr(dep_filter[0], dep_filter[2]):
@@ -176,8 +182,8 @@ class ModelApi:
             if not ModelApi.intra_file(ea):
                 found.append(ea)
 
+    @staticmethod
     def filter_model(
-        self,
         source_elem: SElement,
         source_graph: SGraph,
         filter_outgoing: FilterAssocations = FilterAssocations.Direct,
@@ -255,8 +261,7 @@ class ModelApi:
             elif filter_setting == FilterAssocations.Direct:
                 if this_new:
                     # Avoid creating descendants multiple times.
-                    self.create_descendants(related_elem, new_or_existing_referred_elem,
-                                            have_attributes)
+                    ModelApi.create_descendants(related_elem, new_or_existing_referred_elem, have_attributes)
 
             elif filter_setting == FilterAssocations.DirectAndIndirect:
                 # Get all indirectly and directly used elements into the subgraph, including
@@ -303,18 +308,19 @@ class ModelApi:
                         whole_graph_stack.append(corresponding_elem)
                     else:
                         raise ValueError(
-                            f"Element \"{elem.name}\" from sub graph not found in the whole graph but it should have been"
+                            f"Element \"{elem.name}\" from sub graph not found in the whole graph"
+                            f" but it should have been"
                         )
         elif have_attributes == HaveAttributes.Ignore:
             pass
 
         return sub_graph
 
+    @staticmethod
     def create_descendants(
-        self,
-        related_elem: SElement,
-        new_or_existing_referred_elem: SElement,
-        have_attributes: HaveAttributes = HaveAttributes.Ignore,
+            related_elem: SElement,
+            new_or_existing_referred_elem: SElement,
+            have_attributes: HaveAttributes = HaveAttributes.Ignore,
     ):
         stack = [(related_elem, new_or_existing_referred_elem)]
         while stack:

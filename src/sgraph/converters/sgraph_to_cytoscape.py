@@ -86,7 +86,7 @@ def main():
     central_element_path = sys.argv[2]
     # Print this way for debugging pursposes: print(g.to_deps(fname=None))
     elem = g.createOrGetElementFromPath(central_element_path)
-    subg = ModelApi().filter_model(elem, g)
+    subg = ModelApi.filter_model(elem, g)
 
     # Print this way for debugging purposes: print(subg.to_xml(fname=None))
     graph_json = graph_to_cyto(subg)
