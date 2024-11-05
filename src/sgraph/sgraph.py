@@ -19,7 +19,7 @@ import uuid
 import xml.sax.handler
 import zipfile
 from copy import copy, deepcopy
-from typing import Callable
+from typing import Callable, TextIO
 from xml.sax import parseString
 from xml.sax.xmlreader import AttributesImpl
 
@@ -853,8 +853,8 @@ class SGraph:
 
     @staticmethod
     def parse_deps(filename: str):
-        with open(filename, errors='ignore') as fn:
-            return SGraph.parse_deps_lines(fn)
+        with open(filename, errors='ignore') as f:
+            return SGraph.parse_deps_lines(f)
 
     @staticmethod
     def parse_deps_lines(content: TextIO):

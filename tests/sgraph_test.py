@@ -8,7 +8,7 @@ MODELFILE = 'modelfile.xml'
 # Helper for creating the model
 def get_model(file_name):
     dirname = os.path.dirname(__file__)
-    filename = os.path.join(dirname, file_name)
+    filename = str(os.path.join(dirname, file_name))
     modelLoader = ModelLoader()
     model = modelLoader.load_model(filename)
     return model
