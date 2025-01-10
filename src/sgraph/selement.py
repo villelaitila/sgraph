@@ -65,9 +65,9 @@ class SElement:
         inbound_info = str(len(self.incoming)) + 'I'
         outbound_info = str(len(self.outgoing)) + 'O'
         if self.parent is not None:
-            return self.name + ' under ' + self.parent.name + ' ' + children_info + ' ' + outbound_info + ' ' + inbound_info
+            return f'{self.name} ({self.getType()}) under {self.parent.name} {children_info} {outbound_info} {inbound_info}'
         else:
-            return self.name + ' ' + children_info + ' ' + outbound_info + ' ' + inbound_info
+            return f'{self.name} ({self.getType()}) {children_info} {outbound_info} {inbound_info}'
 
     def addChild(self, child: "SElement"):
         """
