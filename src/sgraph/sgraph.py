@@ -854,10 +854,10 @@ class SGraph:
     @staticmethod
     def parse_deps(filename: str):
         with open(filename, errors='ignore') as f:
-            return SGraph.parse_deps_lines(f)
+            return SGraph.parse_deps_lines(f.read().splitlines())
 
     @staticmethod
-    def parse_deps_lines(content: TextIO):
+    def parse_deps_lines(content: list[str]):
         TAGLEN = len('<NEWLINE>')
         modelAttrs: dict[str, str | dict[str, str]] = {}
         metaAttrs: dict[str, dict[str, str]] = {}

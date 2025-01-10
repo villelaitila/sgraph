@@ -9,8 +9,8 @@ MODELFILE = 'modelfile.xml'
 def get_model(file_name):
     dirname = os.path.dirname(__file__)
     filename = str(os.path.join(dirname, file_name))
-    modelLoader = ModelLoader()
-    model = modelLoader.load_model(filename)
+    model_loader = ModelLoader()
+    model = model_loader.load_model(filename)
     return model
 
 def test_deepcopy():
