@@ -19,7 +19,7 @@ import uuid
 import xml.sax.handler
 import zipfile
 from copy import copy, deepcopy
-from typing import Callable, TextIO
+from typing import Callable
 from xml.sax import parseString
 from xml.sax.xmlreader import AttributesImpl
 
@@ -155,13 +155,13 @@ class SGraph:
             if isinstance(v, int) or isinstance(v, float):
                 v = str(v)
             elif isinstance(v, set):
-                v = ';'.join(sorted(v))
+                v = ';'.join(sorted(map(lambda x: str(x), v)))
             elif isinstance(v, dict):
                 # Dictionaries may be used only during analysis, so those are discarded from the
                 # outputs.
                 v = ''
             elif isinstance(v, list):
-                v = ';'.join(v)
+                v = ';'.join(sorted(map(lambda x: str(x), v)))
             else:
                 v = str(v)
             if v:
@@ -173,15 +173,24 @@ class SGraph:
                     '\n', '&' + '#' + '10;').replace('"', '&quot;')
             return ''
 
-        def dump_node(c: SElement, elem_to_num: dict[SElement, str], reclevel: int):
+        def dump_node(c: SElement, elem_to_num: dict[SElement, str], reclevel: int, fail_if_nonstr_data: bool = False):
             sorted_attrs = sorted(
                 filter(lambda x: not x[0].startswith('_tmp_attr_'), c.attrs.items()))
             # noinspection PyUnusedLocal
             current_indent = '  '.join(['' for _unused in range(0, reclevel)])
-            nattrs = ' '.join([
-                enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
-                if x[0] != 'type'
-            ])
+            try:
+                nattrs = ' '.join([
+                    enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
+                    if x[0] != 'type'
+                ])
+            except TypeError as te:
+                msg = f'Failed to encode attribute value to string: {te} {c.getPath()} {sorted_attrs}'
+                if fail_if_nonstr_data:
+                    raise Exception(msg)
+                else:
+                    sys.stderr.write(msg + '\n')
+                    nattrs = ''
+
             if c.incoming and c not in elem_to_num:
                 sys.stderr.write('Error, Producing erroneous model with references to ' +
                                  c.getPath() + '\n')
@@ -217,9 +226,18 @@ class SGraph:
                     if idrefs:
                         # idrefs = ','.join(map(lambda x: str(x.toElement.num), g))
                         sorted_attrs = sorted(ea_attrs.items())
-                        ea_attrs_str = ' '.join([
-                            enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
-                        ])
+                        try:
+                            ea_attrs_str = ' '.join([
+                                enc_xml_a_n(x[0]) + '="' + enc_xml_a_v(x[1]) + '"' for x in sorted_attrs
+                            ])
+                        except TypeError as te:
+                            msg = f'Failed to encode assoc attribute value to string: {deptype} {te} {c.getPath()} {sorted_attrs}'
+                            if fail_if_nonstr_data:
+                                raise Exception(msg)
+                            else:
+                                sys.stderr.write(msg + '\n')
+                                ea_attrs_str = ''
+
                         f.write('  <r r="' + idrefs + '" t="' + deptype + '" ' + ea_attrs_str +
                                 '/>\n')
 
