@@ -738,6 +738,11 @@ class SElement:
                 else:
                     return self.createElementChain(n), True
 
+    def rename(self, new_name: str):
+        self.parent.childrenDict.pop(self.name)
+        self.name = new_name
+        self.parent.childrenDict[new_name] = self
+
 
 class ElementIterator:
     current: SElement
