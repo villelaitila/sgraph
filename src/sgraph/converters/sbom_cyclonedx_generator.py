@@ -1,9 +1,9 @@
+from datetime import datetime
 import json
 import sys
-import time
 from collections import defaultdict
 
-from sgraph import SGraph
+from sgraph import SGraph, SElement
 
 
 def valid_for_bom(elem):
@@ -135,9 +135,37 @@ def clean_name(name):
     return name.replace('__slash__', '/')
 
 
-def elem_as_bom_data(elem, other_externals_by_name):
+def produce_source_code_references(elem, external_root):
+
+    direct_references = []
+    traverse_externals = []
+    for incoming_assoc in elem.incoming + elem.parent.incoming:
+        if not incoming_assoc.fromElement.isDescendantOf(external_root):
+            direct_references.append(incoming_assoc.fromElement.getPath())
+        else:
+            traverse_externals.append(incoming_assoc.fromElement)
+
+
+    indirect_dependencies = []
+    for external_dependency in traverse_externals:
+        stack = list((external_dependency,))
+        while stack:
+            e = stack.pop(0)
+            if not e.isDescendantOf(external_root):
+                indirect_dependencies.append(e.getPath())
+            else:
+                if e.incoming:
+                    stack += [a.fromElement for a in e.incoming]
+                if e.parent.incoming:
+                    stack += [a.fromElement for a in e.incoming]
+
+    return '; '.join(sorted(direct_references))
+
+
+def elem_as_bom_data(elem, other_externals_by_name, external_root):
     """
-    "bom-ref": "pkg:golang/github.com/0xAX/notificator@v0.0.0-20191016112426-3962a5ea8da1",
+    Example data of an element:
+      "bom-ref": "pkg:golang/github.com/0xAX/notificator@v0.0.0-20191016112426-3962a5ea8da1",
       "type": "library",
       "name": "github.com/0xAX/notificator",
       "version": "v0.0.0-20191016112426-3962a5ea8da1",
@@ -166,6 +194,7 @@ def elem_as_bom_data(elem, other_externals_by_name):
 
     :param elem: element
     :param other_externals_by_name: dict of external elements by name
+    :param external_root:
     :return:
     """
     licenses = bom_licenses(elem)
@@ -183,16 +212,17 @@ def elem_as_bom_data(elem, other_externals_by_name):
             v = ''
         ref = bom_ref(elem, v)
 
-        example_usages = ';'.join(list(map(lambda x: x.fromElement.getPath(), elem.incoming)))
-        custom_properties = {'sourceCodeReferences': example_usages}
+        custom_properties = {'name': 'sourceCodeReferences',
+                             'value': produce_source_code_references(elem, external_root)}
         component = {
             'name': clean_name(elem.name),
             'version': v,
             'bom-ref': ref,
             'purl': ref,
+            'type': 'library',
             'licenses': licenses,
             'scope': 'required',
-            'properties': custom_properties,
+            'properties': [custom_properties],
             'description': ''
         }
         output.append(component)
@@ -283,9 +313,9 @@ def combine_elems(elem, other_externals_by_name):
                         break
 
 
-def analyze_3rdparty(external_elem, sbom):
-    stack = list(external_elem.children)
-    other_externals_by_name = {}
+def analyze_3rdparty(external_root, sbom):
+    stack = list(external_root.children)
+    other_externals_by_name: dict[str, list[SElement]] = {}
     while stack:
         elem = stack.pop(0)
         other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
@@ -298,27 +328,28 @@ def analyze_3rdparty(external_elem, sbom):
         stack += elem.children
     """
 
-    stack = list(external_elem.children)
+    stack = list(external_root.children)
     while stack:
         elem = stack.pop(0)
-        for bom_component in elem_as_bom_data(elem, other_externals_by_name):
+        for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root):
             sbom.components.append(bom_component)
         stack += elem.children
 
 
 class SBOM:
+
     BASIC_INFO = {
         'bomFormat': 'CycloneDX',
-        'specVersion': '1.3',
+        'specVersion': '1.6',
         'serialNumber': 'urn:uuid:1f860713-54b9-4253-ba5a-9554851904af',  # TODO what?
         'version': 1,
         'metadata': {
-            'timestamp': time.ctime(),
-            'tools': {
+            'timestamp': '',
+            'tools': [{
                 'vendor': 'Softagram',
                 'name': 'Softagram analyzer',
                 'version': '3.0.x'
-            }
+            }]
         }
     }
 
@@ -328,6 +359,10 @@ class SBOM:
 
     def as_cyclonedx_json(self):
         data = SBOM.BASIC_INFO
+
+        # RFC 3339 format
+        data['metadata']['timestamp'] = datetime.now().isoformat() + 'Z'
+
         data['metadata']['component'] = self.metadata_component
         data['components'] = self.components
         return data

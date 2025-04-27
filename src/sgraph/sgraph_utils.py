@@ -1,3 +1,4 @@
+from .selement import SElement
 from .sgraph import SElementAssociation
 
 
@@ -24,7 +25,7 @@ def addEA(deptype: str, info: str | None, id1: str, id2: str, model) -> SElement
     return new_ea
 
 
-def find_assocs_between(e_orig, e, elems: list) -> set[tuple]:
+def find_assocs_between(e_orig, e, elems: list) -> set[SElement, SElement]:
     elem_tuples: set[tuple] = set()
     for out in e.outgoing:
         for elem in elems:
