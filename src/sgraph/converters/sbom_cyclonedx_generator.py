@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 import json
 import sys
@@ -71,9 +72,6 @@ def bom_ref(elem, v):
         if ' of tag ' in pkgid:
             pkgid = pkgid.split(' of tag ')[0]
     else:
-        if pkgid == 'react':
-            print('b')
-
         pkgtype = '???'
 
     v = v.lstrip('^')
@@ -212,8 +210,8 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
             v = ''
         ref = bom_ref(elem, v)
 
-        custom_properties = {'name': 'sourceCodeReferences',
-                             'value': produce_source_code_references(elem, external_root)}
+        custom_properties = [{'name': 'sourceCodeReferences',
+                             'value': produce_source_code_references(elem, external_root)}]
         component = {
             'name': clean_name(elem.name),
             'version': v,
@@ -222,7 +220,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
             'type': 'library',
             'licenses': licenses,
             'scope': 'required',
-            'properties': [custom_properties],
+            'properties': custom_properties,
             'description': ''
         }
         output.append(component)
@@ -236,10 +234,9 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
                     filter(lambda x: x != elem.parent,
                            other_externals_by_name[clean_name(elem.name)]))
                 if len(other_excluding_parent) > 1:
-                    print(f'Processing {elem.getPath()} Other similarly named exists  : ')
+                    sys.stderr.write(f'Processing {elem.getPath()} Other similarly named exists  : \n')
                     for e in other_excluding_parent:
-                        print('  - ' + e.getPath())
-            print(elem.getPath())
+                        sys.stderr.write('  - ' + e.getPath() + '\n')
 
     return output
 
@@ -264,23 +261,18 @@ def combine_elems(elem, other_externals_by_name):
             other_excluding_parent = list(
                 filter(lambda x: x != elem.parent, other_externals_by_name[clean_name(elem.name)]))
             if len(other_excluding_parent) > 1:
-                print('Other similarly named exists     : ')
+                sys.stderr.write('Other similarly named exists     : ')
 
                 all_n = other_excluding_parent
                 for e in other_excluding_parent:
-                    print('  - ' + e.getPath())
+                    sys.stderr.write('  - ' + e.getPath() + ' ')
                     dep_summary_1 = defaultdict(int)
                     for association in e.incoming:
                         dep_summary_1[(file_extension(
                             association.fromElement), association.deptype)] += 1
-                    print('     * ' + str(dict(dep_summary_1)))
+                    sys.stderr.write('     * ' + str(dict(dep_summary_1)) + ' ')
                     for d in dep_summary_1:
                         e.attrs.setdefault('user_exts', set()).add(d[0])
-
-                if len(all_n) < 2:
-                    if len(pkg_deps) > 0:
-                        print(dict(dep_summary))
-                        print(elem.getPath())
 
                 while len(all_n) > 1:
                     under_ext = None
@@ -341,14 +333,14 @@ class SBOM:
     BASIC_INFO = {
         'bomFormat': 'CycloneDX',
         'specVersion': '1.6',
-        'serialNumber': 'urn:uuid:1f860713-54b9-4253-ba5a-9554851904af',  # TODO what?
+        'serialNumber': '<REPLACED LATER>',  # TODO what?
         'version': 1,
         'metadata': {
-            'timestamp': '',
+            'timestamp': '<REPLACED LATER>',
             'tools': [{
                 'vendor': 'Softagram',
-                'name': 'Softagram analyzer',
-                'version': '3.0.x'
+                'name': 'Softagram Analyzer',
+                'version': '3.0'
             }]
         }
     }
@@ -365,6 +357,9 @@ class SBOM:
 
         data['metadata']['component'] = self.metadata_component
         data['components'] = self.components
+
+        # RFC-4122: ^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+        data['serialNumber'] = f'urn:uuid:{uuid.uuid4()}'
         return data
 
 
@@ -389,7 +384,7 @@ def analyze_component_section(elem, sbom):
     :return:
     """
     c = {
-        'bom-ref': '',
+        'bom-ref': elem.getPath(),
         'type': 'application',
         'name': elem.name,
         'version': '',
@@ -415,7 +410,6 @@ def generate_from_sgraph(sgraph: SGraph):
     """
     sbom = SBOM()
     for elem in sgraph.rootNode.children:
-        print(elem.name)
         for repo_or_ext in elem.children:
             if repo_or_ext.name == 'External' and repo_or_ext.getType() not in {'dir', 'repo'}:
                 analyze_3rdparty(repo_or_ext, sbom)
