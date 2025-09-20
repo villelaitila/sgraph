@@ -1,5 +1,6 @@
 import sys
-from sgraph.loader.model_loader import ModelLoader
+
+from sgraph.loader import ModelLoader
 from sgraph.modelapi import ModelApi
 
 

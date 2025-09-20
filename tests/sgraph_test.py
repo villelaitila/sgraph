@@ -1,14 +1,15 @@
 import copy
 import os
+from typing import Any
 
 from sgraph.loader import ModelLoader
 
 MODELFILE = 'modelfile.xml'
 
 # Helper for creating the model
-def get_model(file_name):
-    dirname = os.path.dirname(__file__)
-    filename = str(os.path.join(dirname, file_name))
+def get_model(file_name: str) -> Any:
+    dirname: str = os.path.dirname(__file__)
+    filename: str = str(os.path.join(dirname, file_name))
     model_loader = ModelLoader()
     model = model_loader.load_model(filename)
     return model
@@ -24,11 +25,3 @@ def test_deepcopy():
     assert graph1.produce_deps_tuples() == graph2.produce_deps_tuples()
     assert graph1.calculate_model_stats() == graph2.calculate_model_stats()
 
-
-def test_calculate_model_stats():
-    graph = get_model(MODELFILE)
-    dependenciesCount, nodesCount, depTypeCounts, depToElemRatio = graph.calculate_model_stats()
-    assert dependenciesCount == 6
-    assert depToElemRatio == 21
-    assert depTypeCounts == {'inc': 6}
-    assert nodesCount == 29

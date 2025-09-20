@@ -19,9 +19,9 @@ def read_attrs_to_list_of_dicts(filepath, sep='\t'):
     return out
 
 
-def read_attrs(filepath, sep='\t'):
-    print(f'read_attrs {filepath}')
+def read_attrs(filepath, sep='\t') -> pd.DataFrame:
     fname = filepath.split('/')[-1]
+    df = None
     if fname.endswith('.zip'):
         fn = fname[:fname.rfind('.zip')]
 

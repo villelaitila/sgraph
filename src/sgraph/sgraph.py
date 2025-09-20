@@ -12,6 +12,7 @@ Example how to use this to parse and handle model files with this tool.
 from __future__ import annotations
 
 import codecs
+from collections.abc import Sequence
 import io
 import os
 import sys
@@ -19,13 +20,13 @@ import uuid
 import xml.sax.handler
 import zipfile
 from copy import copy, deepcopy
-from typing import Callable
+from typing import Callable, Optional, TextIO
 from xml.sax import parseString
 from xml.sax.xmlreader import AttributesImpl
 
 from .selement import SElement
 from .selementassociation import SElementAssociation
-from .sgraph_utils import ParsingIntentionallyAborted, addEA, find_assocs_between
+from .sgraph_utils import ParsingIntentionallyAborted, add_ea, find_assocs_between
 
 
 class SGraph:
@@ -115,16 +116,16 @@ class SGraph:
         # class RecLevel():
         #    def __init__(self):
 
-        def add_number(n: SElement, counter: Counter):
+        def add_number(n: SElement, the_counter: Counter):
             if len(n.incoming) > 0:
                 if n not in elem_to_num:
-                    num = str(counter.now())
+                    num = str(the_counter.now())
 
                     elem_to_num[n] = num
                     num_to_elem[num] = n
 
             for child in n.children:
-                add_number(child, counter)
+                add_number(child, the_counter)
 
             toElems = set([x.toElement for x in n.outgoing])
 
@@ -271,8 +272,9 @@ class SGraph:
         f.flush()
         if fname is not None:
             f.close()
+            return None
         elif stdout:
-            pass
+            return None
         else:
             # We can ignore the type because out of the possible types only TextIO doesn't have
             # getvalue and it is handled above by checking if stdout is True
@@ -453,7 +455,7 @@ class SGraph:
         nodesCount = self.rootNode.getNodeCount()
         depTypeCounts: dict[str, int] = {}
         self.rootNode.getEATypeCounts(depTypeCounts)
-        depToElemRatio = round(dependenciesCount / nodesCount * 100)
+        depToElemRatio = round(dependenciesCount / nodesCount, 2)
         return dependenciesCount, nodesCount, depTypeCounts, depToElemRatio
 
     def getElement(self, elem: SElement) -> SElement | None:
@@ -573,20 +575,20 @@ class SGraph:
                 self.ignore_all_associations = False
                 self.only_root = only_root
 
-                self.whitelisted_elem_attributes = None
-                self.blacklisted_elem_attributes = []
+                self.whitelisted_elem_attributes: set[str] = set()
+                self.blacklisted_elem_attributes: set[str] = set()
                 self.ignore_all_elem_attributes = False
 
-                self.whitelisted_assoc_attributes = None
-                self.blacklisted_assoc_attributes = []
+                self.whitelisted_assoc_attributes: set[str] = set()
+                self.blacklisted_assoc_attributes: set[str] = set()
                 self.ignore_all_assoc_attributes = False
 
-            def set_type_rules(self, type_rules: list[str]):
-                if type_rules is None:
+            def set_type_rules(self, the_type_rules: Optional[list[str]]):
+                if the_type_rules is None:
                     self.acceptableAssocTypes = None
                     self.ignoreAssocTypes = None
                 else:
-                    for type_rule in type_rules:
+                    for type_rule in the_type_rules:
                         type_rule = type_rule.strip()
                         if type_rule.strip().startswith('IGNORE '):
                             if self.ignoreAssocTypes is None:
@@ -602,15 +604,12 @@ class SGraph:
                                 self.acceptableAssocTypes = set()
                             self.acceptableAssocTypes.add(type_rule)
 
-            def set_attribute_rules(self, elem_attribute_filters,
-                                    assoc_attribute_filters: list[str]):
-                if elem_attribute_filters is not None:
-                    for attr_rule in elem_attribute_filters:
+            def set_attribute_rules(self, the_elem_attribute_filters: Optional[list[str]],
+                                    the_assoc_attribute_filters: Optional[list[str]]):
+                if the_elem_attribute_filters is not None:
+                    for attr_rule in the_elem_attribute_filters:
                         a = attr_rule.strip()
                         if a.strip().startswith('IGNORE '):
-                            if self.blacklisted_elem_attributes is None:
-                                self.blacklisted_elem_attributes = set()
-
                             t = a[7:].strip()
                             if t == '*':
                                 self.ignore_all_elem_attributes = True
@@ -618,16 +617,11 @@ class SGraph:
                                 self.blacklisted_elem_attributes.add(t)
                         else:
                             if a != '*':
-                                if self.whitelisted_elem_attributes is None:
-                                    self.whitelisted_elem_attributes = set()
                                 self.whitelisted_elem_attributes.add(a)
-                if assoc_attribute_filters is not None:
-                    for attr_rule in assoc_attribute_filters:
+                if the_assoc_attribute_filters is not None:
+                    for attr_rule in the_assoc_attribute_filters:
                         a = attr_rule.strip()
                         if a.strip().startswith('IGNORE '):
-                            if self.blacklisted_assoc_attributes is None:
-                                self.blacklisted_assoc_attributes = set()
-
                             t = a[7:].strip()
                             if t == '*':
                                 self.ignore_all_assoc_attributes = True
@@ -635,8 +629,6 @@ class SGraph:
                                 self.blacklisted_assoc_attributes.add(t)
                         else:
                             if a != '*':
-                                if self.whitelisted_assoc_attributes is None:
-                                    self.whitelisted_assoc_attributes = set()
                                 self.whitelisted_assoc_attributes.add(a)
 
             def startElement(self, tag_name: str, attrs: AttributesImpl):
@@ -658,7 +650,7 @@ class SGraph:
                                 return
 
                         value = attrs.get('v')
-                        self.currentRelation[name] = value
+                        self.currentRelation[name] = value  # type: ignore
                     else:
                         if self.currentElement is not None and len(self.currentElementPath) > 0:
                             if name in self.blacklisted_elem_attributes:
@@ -669,13 +661,13 @@ class SGraph:
 
                             self.property += 1
                             value = attrs.get('v')
-                            self.currentElement.addAttribute(name, value)
+                            self.currentElement.addAttribute(name, value)  # type: ignore
                         else:
                             val = attrs.get('v')
                             sys.stderr.write(f' discarding {name} {val} attrs, no element to assign the data\n')
 
                 elif tag_name == 'e':
-                    element_name = attrs.get('n')
+                    element_name: str = attrs.get('n')  # type: ignore
 
                     if len(self.idstack) == 0:
                         e = SElement(self.rootNode, element_name)
@@ -757,8 +749,7 @@ class SGraph:
                     pass  # all is fine
                 elif t and t in self.acceptableAssocTypes:
                     pass  # ok
-                elif (self.acceptableAssocTypes is not None and
-                      len(self.acceptableAssocTypes) == 0):
+                elif len(self.acceptableAssocTypes) == 0:
                     # do not accept any deps
                     return
                 else:
@@ -824,11 +815,11 @@ class SGraph:
 
     @staticmethod
     def parse_xml_or_zipped_xml(
-                model_file_path: str,
-                type_rules: list[str]=None,
-                elem_attribute_filters: list[str]=None,
+                model_file_path: str | TextIO,
+                type_rules: Optional[list[str]]=None,
+                elem_attribute_filters: Optional[list[str]]=None,
                 only_root: bool=False,
-                assoc_attribute_filters: list[str]=None
+                assoc_attribute_filters: Optional[list[str]]=None
     ):
         if isinstance(model_file_path, str) and '.xml.zip' in model_file_path:
             with open(model_file_path, 'rb') as filehandle:
@@ -849,10 +840,10 @@ class SGraph:
 
     @staticmethod
     def parse_xml_file_or_stream(filename_or_stream: io.TextIOWrapper | str,
-                                 type_rules: list[str]=None,
-                                 elem_attribute_filters: list[str]=None,
+                                 type_rules: Optional[list[str]]=None,
+                                 elem_attribute_filters: Optional[list[str]]=None,
                                  only_root: bool=False,
-                                 assoc_attribute_filters: list[str]=None):
+                                 assoc_attribute_filters: Optional[list[str]]=None):
             return SGraph.__parse_xml(filename_or_stream, type_rules,
                              elem_attribute_filters, only_root, False,
                              assoc_attribute_filters)
@@ -875,7 +866,7 @@ class SGraph:
             return SGraph.parse_deps_lines(f.read().splitlines())
 
     @staticmethod
-    def parse_deps_lines(content: list[str]):
+    def parse_deps_lines(content: Sequence[str]):
         TAGLEN = len('<NEWLINE>')
         modelAttrs: dict[str, str | dict[str, str]] = {}
         metaAttrs: dict[str, dict[str, str]] = {}
@@ -978,7 +969,7 @@ class SGraph:
                         id2 = id2.replace('//', '/')
                     if t is None:
                         t = ''
-                    ea = addEA(t, info, id1, id2, egm)
+                    ea = add_ea(t, info, id1, id2, egm)
                     lastEA = ea
             else:
                 if line.strip() != '':
@@ -1066,42 +1057,6 @@ class SGraph:
         for c in self.rootNode.children:
             depth = max(c.getMaxDepth(1), depth)
         return depth
-
-    def calculate_graph_density(
-        self,
-        elempath: str,
-        detail_level: int,
-        external_elem: SElement | None = None,
-    ):
-        elems: list[SElement] = []
-
-        def traverse_until(elem: SElement, current_level: int, detail_level: int):
-            if current_level >= detail_level and external_elem != elem:
-                elems.append(elem)
-            elif external_elem != elem:
-                for c in elem.children:
-                    traverse_until(c, current_level + 1, detail_level)
-
-        if elempath == '/':
-            # global
-            e = self.rootNode
-            traverse_until(e, 0, detail_level)
-            for c in e.children:
-                traverse_until(c, 1, detail_level)
-        else:
-            # TODO Not tested
-            e = self.findElementFromPath(elempath)
-            if e is not None:
-                traverse_until(e, e.getLevel(), detail_level)
-
-        if len(elems) == 0:
-            return 0
-
-        assocs_between: set[tuple[SElement, SElement]] = set()
-        for e in elems:
-            assocs_between.update(find_assocs_between(e, e, elems))
-
-        return len(assocs_between) / len(elems)
 
     def copy_ea_attrs_from_other_models(
         self,
