@@ -141,8 +141,13 @@ sgraph is designed for performance:
 - ✅ Memory-optimized data structures
 - ✅ Fast XML parsing and generation
 
+## 🤖 AI-Powered Analysis
+
+**[sgraph-mcp-server](https://softagram.github.io/sgraph-mcp-server/)** - Analyze large codebases using sgraph over the Model Context Protocol (MCP). Enable AI agents to understand your software architecture with high-performance search, dependency analysis, and intelligent refactoring capabilities.
+
 ## 🔗 Links
 
+- [🤖 SGraph MCP Server](https://softagram.github.io/sgraph-mcp-server/) - AI-powered code analysis
 - [📦 PyPI Package](https://pypi.org/project/sgraph/)
 - [📚 GitHub Repository](https://github.com/softagram/sgraph)
 - [🐛 Issue Tracker](https://github.com/softagram/sgraph/issues)
