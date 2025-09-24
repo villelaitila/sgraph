@@ -1,0 +1,58 @@
+# Jekyll configuration for sgraph GitHub Pages
+title: "sgraph"
+description: "Hierarchical Graph Data Structures for Software Analysis"
+url: "https://softagram.github.io"
+baseurl: "/sgraph"
+
+# GitHub repository
+github:
+  repository_url: "https://github.com/softagram/sgraph"
+  
+# Theme
+theme: minima
+# Alternative themes you can try:
+# theme: jekyll-theme-cayman
+# theme: jekyll-theme-minimal
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+  - jekyll-seo-tag
+
+# Navigation
+header_pages:
+  - getting-started.md
+  - examples.md
+  - api-reference.md
+  - data-formats.md
+  - visualization.md
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+
+# Exclude from processing
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+
+# Social links
+author:
+  name: "Ville Laitila"
+  email: "ville.laitila@softagram.com"
+
+# SEO
+lang: en_US
+twitter:
+  username: softagram
+  card: summary_large_image
+
+# Google Analytics (add your tracking ID)
+# google_analytics: G-XXXXXXXXXX
