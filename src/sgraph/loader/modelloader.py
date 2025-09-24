@@ -57,13 +57,8 @@ class ModelLoader:
             filepath_of_model_root = filepath.replace('/dependency/modelfile.xml.zip', '').replace(
                 '/dependency/modelfile.xml', '')
             a = AttributeLoader()
-            model, missing_attr_files = a.load_all_files(model, filepath_of_model_root,
+            model, _missing_attr_files = a.load_all_files(model, filepath_of_model_root,
                                                          elem_attribute_filters)
-
-            for missing in missing_attr_files:
-                if missing != 'attr_temporary.csv':
-                    sys.stderr.write('warning: cannot load default attribute file when loading the '
-                                     'model for data mining. missing: ' + missing + '\n')
 
         return model
 

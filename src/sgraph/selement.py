@@ -23,6 +23,19 @@ class SElement:
     human_readable_name: str
 
     def __init__(self, parent: Optional['SElement'], name: str):
+        """
+        Initialize an element and attach it under the given parent.
+
+        Args:
+            parent: Optional parent element; when provided the element is inserted
+                into the parent's children and childrenDict (ensuring uniqueness).
+            name: Element name; '/' is normalized to '__slash__'.
+
+        Raises:
+            Exception: If parent equals self (self loop).
+            SElementMergedException: If an element with the same name already exists
+                under the parent (in non-DEBUG mode).
+        """
         if name == '':
             # sys.stderr.write('Creating with empty name\n')
             pass
@@ -204,6 +217,15 @@ class SElement:
                 elem.name, self.getPath()))
 
     def remove(self, leaveParentUntouched: bool = False):
+        """
+        Remove this element from the tree and detach all associations.
+
+        This clears outgoing and incoming associations, removes all descendants,
+        and detaches from the parent unless leaveParentUntouched is True.
+
+        Args:
+            leaveParentUntouched: When True, keeps parent's child list untouched.
+        """
         if not leaveParentUntouched:
             if self.parent is not None:
                 self.parent.detachChild(self)
@@ -412,6 +434,18 @@ class SElement:
                     return None
 
     def createOrGetElement(self, n: str) -> "SElement":
+        """
+        Return an existing direct or nested child by path, creating missing parts.
+
+        The path may be a single segment or a slash-separated path relative to this
+        element. If the path exists, it is returned; otherwise the missing chain is created.
+
+        Args:
+            n: Relative child path.
+
+        Returns:
+            SElement: The found or newly created element.
+        """
         if n.startswith('/'):
             # sys.stderr.write('invalid id (1): '+n+'\n')
             n = n[1:]
@@ -488,6 +522,18 @@ class SElement:
             return self.parent.getNextSiblingRecursive()
 
     def verify(self, elems: set["SElement"], i: int):
+        """
+        Validate subtree structure and detect broken or duplicate relationships.
+
+        Checks unique child names, correct parent links, and unique paths while recursing.
+
+        Args:
+            elems: Set used to track visited elements to detect duplicates.
+            i: Traversal counter (used only for diagnostics).
+
+        Raises:
+            Exception: If duplicates or structural inconsistencies are found.
+        """
         # if i % 1000 == 0:
         #    print(i)
         elems_by_name = {}
@@ -677,6 +723,12 @@ class SElement:
         return depth
 
     def clean_duplicate_associations(self):
+        """
+        Detect duplicate outgoing associations in this subtree.
+
+        Computes a hash per association to identify duplicates and recurses into children.
+        Removal is disabled by default; see the commented block for debugging-oriented cleanup.
+        """
         if self.outgoing:
             ea_hashes: set[int] = set()
             dupes: list[SElementAssociation] = []
@@ -716,6 +768,15 @@ class SElement:
             return True
 
     def create_or_get_element(self, n: str) -> tuple["SElement", bool]:
+        """
+        Like createOrGetElement but also indicates whether a new element was created.
+
+        Args:
+            n: Relative child path.
+
+        Returns:
+            tuple[SElement, bool]: (element, created_flag)
+        """
         if n.startswith('/'):
             # sys.stderr.write('invalid id (1): '+n+'\n')
             n = n[1:]
@@ -739,7 +800,10 @@ class SElement:
                     return self.createElementChain(n), True
 
     def rename(self, new_name: str):
-        self.parent.childrenDict.pop(self.name)
+        if self.parent is None:
+            self.name = new_name
+            return
+        self.parent.childrenDict.pop(self.name, None)
         self.name = new_name
         self.parent.childrenDict[new_name] = self
 

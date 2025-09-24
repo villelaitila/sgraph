@@ -5,13 +5,13 @@ from .sgraph import SElementAssociation
 # This file cannot have much type annotations because of circular deps.
 
 
-def addEA(deptype: str, info: str | None, id1: str, id2: str, model) -> SElementAssociation:
+def add_ea(deptype: str, info: str | None, id1: str, id2: str, model) -> SElementAssociation:
     e1 = None
     if not id1.startswith('generate dependency'):
-        e1 = model.createOrGetElementFromPath(id1)
+        e1: SElement = model.createOrGetElementFromPath(id1)
     e2 = None
     if not id2.startswith('generate dependency'):
-        e2 = model.createOrGetElementFromPath(id2)
+        e2: SElement = model.createOrGetElementFromPath(id2)
 
     if e1 is None or e2 is None:
         raise ValueError(
@@ -25,14 +25,23 @@ def addEA(deptype: str, info: str | None, id1: str, id2: str, model) -> SElement
     return new_ea
 
 
-def find_assocs_between(e_orig, e, elems: list) -> set[SElement, SElement]:
-    elem_tuples: set[tuple] = set()
-    for out in e.outgoing:
-        for elem in elems:
-            if out.toElement.isDescendantOf(elem):
-                elem_tuples.add((e_orig, elem))
-    for child in e.children:
-        elem_tuples.update(find_assocs_between(e_orig, child, elems))
+def find_assocs_between(e_orig: SElement, e: SElement, elems: list[SElement]) -> set[tuple[SElement, SElement]]:
+    elem_tuples: set[tuple[SElement, SElement]] = set()
+    stack = [e]
+    while stack:
+        current = stack.pop()
+
+        for out in current.outgoing:
+            if out.toElement in elems:
+                elem_tuples.add((e_orig, out.toElement))
+                continue
+            for elem in elems:
+                if out.toElement.isDescendantOf(elem):
+                    elem_tuples.add((e_orig, elem))
+                    break
+
+        stack.extend(current.children)
+
     return elem_tuples
 
 
