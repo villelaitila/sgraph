@@ -70,7 +70,7 @@ python scripts/release.py --version 1.2.0
 python scripts/release.py --bump patch --dry-run
 ```
 
-The script automates the full release workflow: version bumping, branch creation, PR creation (requires `gh` CLI), tagging, building, PyPI upload (requires `twine`), and GitHub release creation. See `scripts/README.md` for setup instructions.
+The script automates the full release workflow: version bumping, branch creation, PR creation (requires `gh` CLI), tagging, building, PyPI upload (requires `twine`), and GitHub release creation with auto-generated release notes from merged PRs. See `scripts/README.md` for setup instructions.
 
 ## Core Architecture
 

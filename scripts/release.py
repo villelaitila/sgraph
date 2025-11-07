@@ -36,19 +36,32 @@ class ReleaseError(Exception):
 
 
 class ReleaseAutomation:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, allow_uncommitted_changes: bool = False, skip_confirmation: bool = False):
         self.dry_run = dry_run
+        self.allow_uncommitted_changes = allow_uncommitted_changes
+        self.skip_confirmation = skip_confirmation
         self.repo_root = Path(__file__).parent.parent.absolute()
         self.setup_cfg = self.repo_root / "setup.cfg"
 
-    def run_command(self, cmd: list[str], check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
-        """Run a shell command with optional dry-run mode."""
+    def run_command(self, cmd: list[str], check: bool = True, capture: bool = True, read_only: bool = False) -> subprocess.CompletedProcess:
+        """Run a shell command with optional dry-run mode.
+
+        Args:
+            cmd: Command to run
+            check: Raise exception on non-zero exit code
+            capture: Capture stdout/stderr
+            read_only: If True, run even in dry-run mode (for reading state, not modifying)
+        """
         cmd_str = " ".join(cmd)
-        if self.dry_run:
+        if self.dry_run and not read_only:
             print(f"[DRY RUN] Would run: {cmd_str}")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-        print(f"Running: {cmd_str}")
+        if self.dry_run and read_only:
+            print(f"[DRY RUN] Reading: {cmd_str}")
+        else:
+            print(f"Running: {cmd_str}")
+
         result = subprocess.run(
             cmd,
             cwd=self.repo_root,
@@ -101,15 +114,18 @@ class ReleaseAutomation:
         print("\n=== Validating preconditions ===")
 
         # Check for uncommitted changes
-        result = self.run_command(["git", "status", "--porcelain"], check=False)
+        result = self.run_command(["git", "status", "--porcelain"], check=False, read_only=True)
         if result.stdout.strip():
-            raise ReleaseError(
-                "Working directory has uncommitted changes. "
-                "Please commit or stash them before releasing."
-            )
+            if self.allow_uncommitted_changes:
+                print("WARNING: Working directory has uncommitted changes (allowed by --allow-uncommitted-changes)")
+            else:
+                raise ReleaseError(
+                    "Working directory has uncommitted changes. "
+                    "Please commit or stash them before releasing."
+                )
 
         # Check current branch
-        result = self.run_command(["git", "branch", "--show-current"], check=False)
+        result = self.run_command(["git", "branch", "--show-current"], check=False, read_only=True)
         current_branch = result.stdout.strip()
         if current_branch != "main":
             raise ReleaseError(
@@ -170,6 +186,11 @@ class ReleaseAutomation:
             print("[DRY RUN] Would wait for PR merge confirmation")
             return
 
+        if self.skip_confirmation:
+            print("\n=== Skipping PR merge wait (--yes flag) ===")
+            print("WARNING: Continuing without confirming PR merge. Make sure PR is merged before running!")
+            return
+
         print("\n=== Waiting for PR merge ===")
         input("Press Enter after the PR has been merged to continue...")
 
@@ -205,6 +226,10 @@ class ReleaseAutomation:
             for f in sorted(files):
                 print(f"  - {f.name}")
 
+        if self.skip_confirmation:
+            print("\nSkipping dist directory confirmation (--yes flag)")
+            return True
+
         response = input("\nDoes the dist directory look correct? (yes/no): ").strip().lower()
         return response in ("yes", "y")
 
@@ -222,11 +247,14 @@ class ReleaseAutomation:
             print("[DRY RUN] Would upload to PyPI")
             return
 
-        response = input("Ready to upload to PyPI? This cannot be undone. (yes/no): ").strip().lower()
-        if response not in ("yes", "y"):
-            print("Skipping PyPI upload. You can run it manually later:")
-            print("  python3 -m twine upload --repository sgraph dist/* --skip-existing")
-            return
+        if not self.skip_confirmation:
+            response = input("Ready to upload to PyPI? This cannot be undone. (yes/no): ").strip().lower()
+            if response not in ("yes", "y"):
+                print("Skipping PyPI upload. You can run it manually later:")
+                print("  python3 -m twine upload --repository sgraph dist/* --skip-existing")
+                return
+        else:
+            print("Uploading to PyPI (confirmation skipped with --yes flag)")
 
         self.run_command([
             sys.executable, "-m", "twine", "upload",
@@ -236,7 +264,7 @@ class ReleaseAutomation:
         ], capture=False)
 
     def create_github_release(self, version: str) -> None:
-        """Create GitHub release."""
+        """Create GitHub release with auto-generated notes."""
         print("\n=== Creating GitHub release ===")
 
         result = subprocess.run(["which", "gh"], capture_output=True, check=False)
@@ -247,15 +275,16 @@ class ReleaseAutomation:
             return
 
         if self.dry_run:
-            print(f"[DRY RUN] Would create GitHub release for v{version}")
+            print(f"[DRY RUN] Would create GitHub release for v{version} with auto-generated notes")
             return
 
         tag_name = f"v{version}"
+        print(f"Creating release with auto-generated notes from merged PRs...")
         self.run_command([
             "gh", "release", "create",
             tag_name,
             "--title", f"Release {version}",
-            "--notes", f"Release {version}",
+            "--generate-notes",
             "--latest"
         ])
 
@@ -279,11 +308,13 @@ class ReleaseAutomation:
                 raise ReleaseError("Must specify either --version or --bump")
 
             # Confirm with user
-            if not self.dry_run:
+            if not self.dry_run and not self.skip_confirmation:
                 response = input(f"\nProceed with release {new_version}? (yes/no): ").strip().lower()
                 if response not in ("yes", "y"):
                     print("Release cancelled.")
                     return
+            elif not self.dry_run and self.skip_confirmation:
+                print(f"\nProceeding with release {new_version} (confirmation skipped)")
 
             # Update version
             self.update_version_in_setup_cfg(new_version)
@@ -357,6 +388,9 @@ Examples:
 
   # Dry run to see what would happen
   python scripts/release.py --bump patch --dry-run
+
+  # Test with uncommitted changes (useful during development)
+  python scripts/release.py --bump patch --dry-run --allow-uncommitted-changes
         """
     )
 
@@ -377,9 +411,25 @@ Examples:
         help="Show what would be done without actually doing it"
     )
 
+    parser.add_argument(
+        "--allow-uncommitted-changes",
+        action="store_true",
+        help="Allow running with uncommitted changes (useful for testing the script itself)"
+    )
+
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip all confirmation prompts (useful for CI/CD)"
+    )
+
     args = parser.parse_args()
 
-    automation = ReleaseAutomation(dry_run=args.dry_run)
+    automation = ReleaseAutomation(
+        dry_run=args.dry_run,
+        allow_uncommitted_changes=args.allow_uncommitted_changes,
+        skip_confirmation=args.yes
+    )
     automation.release(version=args.version, bump=args.bump)
 
 
