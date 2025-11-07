@@ -133,34 +133,56 @@ def clean_name(name):
     return name.replace('__slash__', '/')
 
 
-def produce_source_code_references(elem, external_root):
+def produce_source_code_references(elem, external_root) -> tuple[list[str], list[str]]:
+    """
+    Produce direct and indirect source code references for the given element.
+    :param elem: The element to analyze.
+    :param external_root: The External element of the model (ancestor of all externals)
+    :return: A tuple containing two lists:
+             - direct_paths: List of direct source code reference paths.
+             - indirect_dependencies: List of indirect dependency paths.
+    """
+    direct_paths = []
+    handled = set()
+    externals_set = set()
 
-    direct_references = []
-    traverse_externals = []
     for incoming_assoc in elem.incoming + elem.parent.incoming:
         if not incoming_assoc.fromElement.isDescendantOf(external_root):
-            direct_references.append(incoming_assoc.fromElement.getPath())
+            if incoming_assoc.fromElement not in handled:
+                handled.add(incoming_assoc.fromElement)
+                direct_paths.append(incoming_assoc.fromElement.getPath())
         else:
-            traverse_externals.append(incoming_assoc.fromElement)
+            if incoming_assoc.fromElement not in externals_set:
+                externals_set.add(incoming_assoc.fromElement)
 
-
-    indirect_dependencies = []
-    for external_dependency in traverse_externals:
+    indirect_dependencies_set = set()
+    handled = set()
+    for external_dependency in externals_set:
         stack = list((external_dependency,))
         while stack:
             e = stack.pop(0)
-            if not e.isDescendantOf(external_root):
-                indirect_dependencies.append(e.getPath())
-            else:
-                if e.incoming:
-                    stack += [a.fromElement for a in e.incoming]
-                if e.parent.incoming:
-                    stack += [a.fromElement for a in e.incoming]
+            if e not in handled:
+                handled.add(e)
+                if not e.isDescendantOf(external_root):
+                    indirect_dependencies_set.add(e)
+                else:
+                    if e.incoming:
+                        for inc in e.incoming:
+                            if inc.fromElement not in handled:
+                                stack.append(inc.fromElement)
+                    if e.parent.incoming:
+                        for inc in e.parent.incoming:
+                            if inc.fromElement not in handled:
+                                stack.append(inc.fromElement)
 
-    return '; '.join(sorted(direct_references))
+    indirect_dependencies = []
+    for d in indirect_dependencies_set:
+        indirect_dependencies.append(d.getPath())
+
+    return direct_paths, indirect_dependencies
 
 
-def elem_as_bom_data(elem, other_externals_by_name, external_root):
+def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
     """
     Example data of an element:
       "bom-ref": "pkg:golang/github.com/0xAX/notificator@v0.0.0-20191016112426-3962a5ea8da1",
@@ -193,6 +215,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
     :param elem: element
     :param other_externals_by_name: dict of external elements by name
     :param external_root:
+    :param noisy: whether to print noisy output to stderr about possible issues
     :return:
     """
     licenses = bom_licenses(elem)
@@ -210,8 +233,21 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
             v = ''
         ref = bom_ref(elem, v)
 
-        custom_properties = [{'name': 'sourceCodeReferences',
-                             'value': produce_source_code_references(elem, external_root)}]
+        direct_deps, indirect_deps = produce_source_code_references(elem, external_root)
+        direct_deps_paths = ';'.join(sorted(direct_deps))
+
+        custom_properties = []  # noqa
+        custom_properties.append({'name': 'sourceCodeReferences', 'value': direct_deps_paths})
+
+        if indirect_deps:
+            custom_properties.append({'name': 'indirectExposureCount', 'value': len(indirect_deps)})
+
+            abstracted_indirect = []
+            for d in indirect_deps:
+                x = d.split('/')[0:4]
+                abstracted_indirect.append('/'.join(x))
+            custom_properties.append({'name': 'indirectExposurePaths', 'value': ';'.join(sorted(abstracted_indirect))})
+
         component = {
             'name': clean_name(elem.name),
             'version': v,
@@ -234,7 +270,8 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root):
                     filter(lambda x: x != elem.parent,
                            other_externals_by_name[clean_name(elem.name)]))
                 if len(other_excluding_parent) > 1:
-                    sys.stderr.write(f'Processing {elem.getPath()} Other similarly named exists  : \n')
+                    if noisy:
+                        sys.stderr.write(f'Processing {elem.getPath()} Other similarly named exists  : \n')
                     for e in other_excluding_parent:
                         sys.stderr.write('  - ' + e.getPath() + '\n')
 
@@ -246,6 +283,7 @@ def contains_incoming_ea_from_elems(e, elem_patterns):
         for pat in elem_patterns:
             if pat in association.fromElement.name:
                 return True
+    return False
 
 
 def combine_elems(elem, other_externals_by_name):
