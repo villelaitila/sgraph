@@ -615,3 +615,4 @@ These examples show the power and flexibility of sgraph for analyzing software a
 - Build automated architecture quality checks into your CI/CD pipeline
 
 Happy analyzing! 🔍📊
+

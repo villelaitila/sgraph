@@ -66,7 +66,7 @@ class SGraph:
 
     def findElementFromPath(self, path: str):
         """
-        Get an element from the model by path.
+        Get an element from the model by path (str)
         """
         if path.startswith('/'):
             path = path[1:]
@@ -459,6 +459,14 @@ class SGraph:
         return dependenciesCount, nodesCount, depTypeCounts, depToElemRatio
 
     def getElement(self, elem: SElement) -> SElement | None:
+        """
+        Get element matching this element based on its structure (name and hierarchy of the elements).
+        The element itself is not used, only its name and parent hierarchy, and the element typically
+        exists in a different SGraph thay may be derived from this SGraph.
+
+        :param elem: the element to search
+        :return: matched element or None
+        """
         if elem.parent is not None and elem.parent.parent is None:
             return self.rootNode.getChildByName(elem.name)
         elif elem.parent is None:

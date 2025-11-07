@@ -627,3 +627,4 @@ def apply_color_coding(element):
 5. **Cache Results**: Save processed visualizations
 
 Ready to create stunning visualizations of your software architecture! 🎨📊
+
