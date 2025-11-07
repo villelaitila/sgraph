@@ -23,6 +23,13 @@ class SElement:
     human_readable_name: str
 
     def __init__(self, parent: Optional['SElement'], name: str):
+        """
+        Creates an element. Only case when the parent may be None, is when creating the root element for the graph,
+        or in case of detached elements.
+
+        :param parent: the parent element (optional), in the end, every element needs parent except the root.
+        :param name: name of the element
+        """
         if name == '':
             # sys.stderr.write('Creating with empty name\n')
             pass
@@ -69,7 +76,7 @@ class SElement:
         else:
             return f'{self.name} ({self.getType()}) {children_info} {outbound_info} {inbound_info}'
 
-    def addChild(self, child: "SElement"):
+    def addChild(self, child: "SElement") -> Optional["SElement"]:
         """
         Add child, but if there is an overlapping element, merge instead and return merged element.
         :param child: the child to be added.
@@ -91,6 +98,7 @@ class SElement:
                 return self.childrenDict[child.name]
 
         child.parent = self
+        return None
 
     def addChildIgnoreWithSameName(self, child: "SElement", elemWithSameName: "SElement"):
         """
@@ -393,6 +401,11 @@ class SElement:
         return None
 
     def findElement(self, n: str) -> "SElement | None":
+        """
+        Find element by path, return None if not found. The path is relative to self.
+        :param n:
+        :return:
+        """
         if n.startswith('/'):
             # sys.stderr.write('invalid id (2): '+n+'\n')
             n = n[1:]
