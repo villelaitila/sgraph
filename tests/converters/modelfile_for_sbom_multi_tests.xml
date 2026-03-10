@@ -1,0 +1,35 @@
+<model version="2.1">
+  <elements>
+    <e n="OrgName">
+      <e n="GroupA">
+        <e n="repoA">
+          <e n="src">
+            <e i="10" n="main.cs">
+              <r r="20" t="use" />
+              <r r="30" t="assembly_ref" />
+            </e>
+          </e>
+        </e>
+        <e n="repoB">
+          <e n="src">
+            <e i="20" n="lib.cs">
+              <r r="40" t="use" />
+            </e>
+          </e>
+        </e>
+      </e>
+      <e n="External">
+        <e n="Assemblies">
+          <e n="Newtonsoft.Json">
+            <e i="30" n="Newtonsoft.Json" version="13.0.1" />
+          </e>
+        </e>
+        <e n="Maven">
+          <e i="40" n="org.apache.commons commons-lang3 of version 3.12.0"
+            artifactId="commons-lang3" groupId="org.apache.commons"
+            repotype="Maven" version="3.12.0" />
+        </e>
+      </e>
+    </e>
+  </elements>
+</model>
