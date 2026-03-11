@@ -1,3 +1,5 @@
+import copy
+import re
 import uuid
 from datetime import datetime
 import json
@@ -5,6 +7,23 @@ import sys
 from collections import defaultdict
 
 from sgraph import SGraph, SElement
+
+# Fixed namespace for deterministic UUID v5 generation of SBOM serial numbers.
+SGRAPH_SBOM_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://softagram.com/sgraph/sbom")
+
+
+def deterministic_serial(element_path: str) -> str:
+    """Generate a deterministic urn:uuid: serial number from an element path.
+    Same path always yields the same UUID (v5, namespace-based)."""
+    return f"urn:uuid:{uuid.uuid5(SGRAPH_SBOM_NS, element_path)}"
+
+
+def slugify_bom_ref(name: str) -> str:
+    """Convert element name to a URL-safe bom-ref slug."""
+    slug = name.lower().replace('_', '-').replace(' ', '-')
+    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    slug = re.sub(r'-+', '-', slug).strip('-')
+    return slug
 
 
 def valid_for_bom(elem):
@@ -370,7 +389,7 @@ class SBOM:
 
     BASIC_INFO = {
         'bomFormat': 'CycloneDX',
-        'specVersion': '1.6',
+        'specVersion': '1.7',
         'serialNumber': '<REPLACED LATER>',  # TODO what?
         'version': 1,
         'metadata': {
@@ -388,7 +407,7 @@ class SBOM:
         self.components = []
 
     def as_cyclonedx_json(self):
-        data = SBOM.BASIC_INFO
+        data = copy.deepcopy(SBOM.BASIC_INFO)
 
         # RFC 3339 format
         data['metadata']['timestamp'] = datetime.now().isoformat() + 'Z'
@@ -455,8 +474,168 @@ def generate_from_sgraph(sgraph: SGraph):
     return sbom.as_cyclonedx_json()
 
 
+def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_by_name):
+    """Walk all descendants of subtree_root and collect External dependencies as BOM components.
+    Uses the ORIGINAL (non-generalized) model so version info is preserved."""
+    if external_root is None:
+        return []
+    components = []
+    seen_refs = set()
+    stack = [subtree_root]
+    while stack:
+        elem = stack.pop(0)
+        for assoc in elem.outgoing:
+            target = assoc.toElement
+            if target.isDescendantOf(external_root) or target == external_root:
+                for component in elem_as_bom_data(target, other_externals_by_name, external_root):
+                    if component['bom-ref'] not in seen_refs:
+                        seen_refs.add(component['bom-ref'])
+                        components.append(component)
+        stack += elem.children
+    return components
+
+
+def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3) -> list[dict]:
+    """Generate one CycloneDX 1.7 SBOM per element at the given level.
+
+    Uses the ORIGINAL model for 3rd-party component collection (preserves version info),
+    and a generalized model for inter-repo dependency detection.
+
+    :param sgraph: The loaded SGraph model
+    :param level: Tree depth at which to split into separate SBOMs
+    :return: List of CycloneDX SBOM dicts
+    """
+    from sgraph.algorithms.generalizer import generalize_model
+
+    # --- Original model: find content elements and External root ---
+    orig_content_elements = []
+    orig_external_root = None
+
+    def collect_orig(elem, current_level):
+        nonlocal orig_external_root
+        if elem.name == 'External' and not elem.typeEquals('dir') and not elem.typeEquals('repo'):
+            orig_external_root = elem
+            return
+        if current_level == level:
+            orig_content_elements.append(elem)
+            return
+        if current_level < level:
+            for child in elem.children:
+                collect_orig(child, current_level + 1)
+
+    for root_child in sgraph.rootNode.children:
+        collect_orig(root_child, 1)
+
+    # Build external name lookup from original model
+    other_externals_by_name = {}
+    if orig_external_root is not None:
+        stack = list(orig_external_root.children)
+        while stack:
+            e = stack.pop(0)
+            other_externals_by_name.setdefault(clean_name(e.name), []).append(e)
+            stack += e.children
+
+    # --- Generalized model: for inter-repo dependency detection ---
+    generalized = generalize_model(sgraph, level_to_generalize=level)
+
+    gen_content_elements = []
+    gen_external_root = None
+
+    def collect_gen(elem, current_level):
+        nonlocal gen_external_root
+        if elem.name == 'External' and not elem.typeEquals('dir') and not elem.typeEquals('repo'):
+            gen_external_root = elem
+            return
+        if current_level == level:
+            gen_content_elements.append(elem)
+            return
+        if current_level < level:
+            for child in elem.children:
+                collect_gen(child, current_level + 1)
+
+    for root_child in generalized.rootNode.children:
+        collect_gen(root_child, 1)
+
+    # Build path -> serial/ref mappings for all content elements (using original paths)
+    elem_serials = {}
+    elem_bom_refs = {}
+    for elem in orig_content_elements:
+        path = elem.getPath()
+        elem_serials[path] = deterministic_serial(path)
+        elem_bom_refs[path] = slugify_bom_ref(elem.name)
+
+    # Build generalized element lookup by path for cross-repo deps
+    gen_elem_by_path = {elem.getPath(): elem for elem in gen_content_elements}
+
+    sboms = []
+    for orig_elem in orig_content_elements:
+        sbom = SBOM()
+        path = orig_elem.getPath()
+        serial = elem_serials[path]
+        ref = elem_bom_refs[path]
+
+        # Metadata component
+        sbom.metadata_component = {
+            'bom-ref': ref,
+            'type': 'application',
+            'name': orig_elem.name,
+            'version': '',
+            'purl': '',
+            'externalReferences': []
+        }
+
+        # 3rd party components from original model (preserves version info)
+        sbom.components = _collect_3rdparty_for_subtree(
+            orig_elem, orig_external_root, other_externals_by_name
+        )
+
+        # Dependencies section
+        depends_on = []
+
+        # 3rd party purl refs
+        for component in sbom.components:
+            depends_on.append(component['bom-ref'])
+
+        # Internal cross-repo dependencies from generalized model (BOM-Link URNs)
+        gen_elem = gen_elem_by_path.get(path)
+        if gen_elem is not None:
+            for assoc in gen_elem.outgoing:
+                target_path = assoc.toElement.getPath()
+                if target_path in elem_serials and target_path != path:
+                    target_serial_uuid = elem_serials[target_path].replace('urn:uuid:', '')
+                    target_ref = elem_bom_refs[target_path]
+                    bom_link = f"urn:cdx:{target_serial_uuid}/1#{target_ref}"
+                    if bom_link not in depends_on:
+                        depends_on.append(bom_link)
+
+        dependencies = [{'ref': ref, 'dependsOn': depends_on}]
+
+        # Serialize
+        data = sbom.as_cyclonedx_json()
+        data['serialNumber'] = serial
+        data['dependencies'] = dependencies
+        sboms.append(data)
+
+    return sboms
+
+
 if __name__ == '__main__':
-    g = SGraph.parse_xml_or_zipped_xml(sys.argv[1])
-    sbom = generate_from_sgraph(g)
-    with open(sys.argv[2], 'w') as f:
-        json.dump(sbom, f, indent=4)
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Generate CycloneDX SBOM from sgraph model')
+    parser.add_argument('model', help='Path to model XML file')
+    parser.add_argument('output', help='Path to output SBOM JSON file')
+    parser.add_argument('--level', type=int, default=None,
+                        help='Generate one SBOM per element at this tree depth. '
+                             'Without this flag, generates a single SBOM (legacy behavior).')
+    args = parser.parse_args()
+
+    g = SGraph.parse_xml_or_zipped_xml(args.model)
+
+    if args.level is not None:
+        result = generate_multi_from_sgraph(g, level=args.level)
+    else:
+        result = generate_from_sgraph(g)
+
+    with open(args.output, 'w') as f:
+        json.dump(result, f, indent=4)
