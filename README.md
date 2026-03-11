@@ -1,7 +1,7 @@
 # sgraph
 
-sgraph contains data format, structures and algorithms to work with hierachic graph structures.
-Typically it is suitable for representing software structures.
+sgraph contains data format, structures and algorithms to work with hierarchic graph structures.
+Typically it is suitable for representing software architectures.
 
 **Documentation**: https://softagram.github.io/sgraph/
 
