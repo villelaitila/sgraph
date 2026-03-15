@@ -88,9 +88,11 @@ Track and improve:
 ## 📖 Documentation
 
 - [**Getting Started Guide**](getting-started.html) - Your first steps with sgraph
-- [**API Reference**](api-reference.html) - Complete API documentation  
+- [**API Reference**](api-reference.html) - Complete API documentation
 - [**Examples & Tutorials**](examples.html) - Real-world usage examples
 - [**Data Formats**](data-formats.html) - Understanding XML and Deps formats
+- [**Graph Conventions**](graph-conventions.html) - How elements and associations represent different domains
+- [**Cypher Query Support**](cypher.html) - Query models with the Cypher graph query language
 - [**Visualization Guide**](visualization.html) - Creating beautiful diagrams
 
 ## 🌟 Example: Analyzing a Real Project
