@@ -4,3 +4,6 @@ lxml~=6.0.2
 Levenshtein==0.27.3
 pytest==9.0.2
 deprecation==2.1.0
+
+# Optional: Cypher query support (python -m sgraph.cypher)
+spycy-aneeshdurg==0.0.3
