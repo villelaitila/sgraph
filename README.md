@@ -136,6 +136,28 @@ Creating a simple model:
 
 ```
 
+### Querying with Cypher
+
+Models can be queried using the [openCypher](https://opencypher.org/) graph query language (requires optional dependency `spycy-aneeshdurg`):
+
+```python
+from sgraph import SGraph
+from sgraph.cypher import cypher_query
+
+model = SGraph.parse_xml_or_zipped_xml('model.xml')
+results = cypher_query(model, 'MATCH (a)-[r:inc]->(b) RETURN a.name, b.name')
+```
+
+A CLI with interactive REPL is also available:
+
+```bash
+pip install spycy-aneeshdurg
+python -m sgraph.cypher model.xml.zip 'MATCH (n:file) RETURN n.name'   # single query
+python -m sgraph.cypher model.xml.zip                                   # interactive REPL
+python -m sgraph.cypher model.xml.zip -f dot 'MATCH (a)-[r]->(b) RETURN a, r, b' | dot -Tpng -o graph.png
+```
+
+See the [Cypher documentation](https://softagram.github.io/sgraph/cypher.html) for full details and query examples.
 
 ## Current utilization
 [Softagram](https://github.com/softagram) uses it for building up the information model about the 
