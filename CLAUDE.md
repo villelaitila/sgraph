@@ -118,6 +118,7 @@ The sgraph data model consists of three primary classes:
 - **loader/**: Model loading utilities
 - **cli/**: Command-line interface utilities
 - **attributes/**: Attribute query and management
+- **cypher.py**: Cypher query language support via sPyCy (optional dependency: `spycy-aneeshdurg`)
 
 ### Data Formats
 
@@ -177,6 +178,20 @@ element = api.getElementByPath('/some/path')
 elements = api.getElementsByName('nginx.c')
 ```
 
+### Querying with Cypher (requires `spycy-aneeshdurg`)
+```python
+from sgraph import SGraph
+from sgraph.cypher import cypher_query
+
+model = SGraph.parse_xml_or_zipped_xml('model.xml')
+results = cypher_query(model, '''
+    MATCH (a:file)-[:imports]->(b)
+    RETURN a.name, b.name
+''')
+```
+
+CLI: `python -m sgraph.cypher model.xml.zip [query]` — supports interactive REPL and 11 output formats (table, csv, tsv, json, jsonl, xml, deps, dot, plantuml, graphml, cytoscape). See `docs/cypher.md` for full documentation.
+
 ## File Locations
 
 - Source code: `src/sgraph/`
@@ -184,3 +199,5 @@ elements = api.getElementsByName('nginx.c')
 - Automation scripts: `scripts/` (includes `release.py`)
 - Package metadata: `setup.cfg`, `setup.py`
 - Documentation: `README.md`, `releasing.md`, `CLAUDE.md`
+- Graph conventions: `docs/graph-conventions.md`
+- Cypher query docs: `docs/cypher.md`
