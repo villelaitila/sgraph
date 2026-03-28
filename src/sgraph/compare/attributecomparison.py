@@ -34,8 +34,7 @@ def compare_attrs(attributes1, attributes2, outmap, type1, type2):
     keys1 = set(attributes1.keys())
     keys2 = set(attributes2.keys())
 
-    intersection = set(keys1)
-    intersection.intersection(keys2)
+    intersection = keys1 & keys2
     intersection -= ignoredAttrs
 
     # TODO: Similar logic needed as implemented in desktop
@@ -78,15 +77,15 @@ def compare_attrs(attributes1, attributes2, outmap, type1, type2):
                                         attributes2[attrName])
                     attrs.add(attrName)
 
-    keys1 = filter(lambda x: x not in intersection, keys1)
-    for attribute_in_a in keys1:
+    keys1_only = keys1 - intersection - ignoredAttrs
+    for attribute_in_a in keys1_only:
         val = attributes1[attribute_in_a]
         if val != '':
             outmap[c + '_' + attribute_in_a] = '{};--'.format(val)
             attrs.add(attribute_in_a)
 
-    keys2 = filter(lambda x: x not in intersection, keys2)
-    for attribute_in_b in keys2:
+    keys2_only = keys2 - intersection - ignoredAttrs
+    for attribute_in_b in keys2_only:
         val = attributes2[attribute_in_b]
         if val != '':
             outmap[c + '_' + attribute_in_b] = '--;{}'.format(val)

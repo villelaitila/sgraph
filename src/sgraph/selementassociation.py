@@ -9,6 +9,28 @@ from sgraph.algorithms.selementutils import lowest_common_ancestor
 
 
 class SElementAssociation:
+    """Represents a directed dependency between two SElements.
+
+    Attributes:
+        fromElement: The source element of the dependency.
+        toElement: The target element of the dependency.
+        deptype: The dependency type string (e.g. ``'call'``, ``'import'``).
+            Named ``deptype`` (not ``type``) to avoid shadowing the Python builtin.
+            Use :meth:`getType` as an alias.
+        attrs: Arbitrary key-value metadata attached to this association.
+
+    Two-phase construction:
+        The constructor stores the endpoints but does **not** register the
+        association on the elements' ``outgoing`` / ``incoming`` lists.
+        Call :meth:`initElems` afterwards to complete registration::
+
+            ea = SElementAssociation(src, tgt, 'import')
+            ea.initElems()   # now visible in src.outgoing & tgt.incoming
+
+        Alternatively, use :meth:`create_unique_element_association` which
+        handles both steps and deduplication in one call.
+    """
+
     __slots__ = 'deptype', 'fromElement', 'toElement', 'attrs'
 
     fromElement: SElement
@@ -57,6 +79,19 @@ class SElementAssociation:
         deptype: str,
         depattrs: dict[str, str | int | list[str]] | None = None,
     ):
+        """Create an association object **without** registering it on the elements.
+
+        After construction the association is an inert object — it does not
+        appear in ``fr.outgoing`` or ``to.incoming``.  Call :meth:`initElems`
+        to complete registration, or use
+        :meth:`create_unique_element_association` for a one-step alternative.
+
+        Args:
+            fr: Source / from-element.
+            to: Target / to-element.
+            deptype: Dependency kind (e.g. ``'call'``, ``'import'``).
+            depattrs: Optional metadata dict.  ``None`` becomes ``{}``.
+        """
         self.deptype = deptype
 
         # Good to have this decommented when testing new analyzers:
@@ -103,6 +138,15 @@ class SElementAssociation:
         return self.attrs
 
     def initElems(self):
+        """Register this association on both endpoint elements.
+
+        Appends ``self`` to :attr:`fromElement.outgoing` and
+        :attr:`toElement.incoming`, and updates the incoming index used
+        for O(1) duplicate detection.
+
+        Must be called exactly once after :meth:`__init__`.
+        :meth:`create_unique_element_association` calls this automatically.
+        """
         self.fromElement.outgoing.append(self)
         self.toElement.incoming.append(self)
         # Maintain index for O(1) duplicate lookup
