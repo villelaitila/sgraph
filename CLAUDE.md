@@ -192,6 +192,28 @@ results = cypher_query(model, '''
 
 CLI: `python -m sgraph.cypher model.xml.zip [query]` — supports interactive REPL and 11 output formats (table, csv, tsv, json, jsonl, xml, deps, dot, plantuml, graphml, cytoscape). See `docs/cypher.md` for full documentation.
 
+### Comparing Models
+```python
+from sgraph.compare.modelcompare import ModelCompare
+from sgraph.compare.compareutils import SLIDING_WINDOW_ATTRS
+
+mc = ModelCompare()
+
+# Basic comparison from files
+compare_model = mc.compare('model_a.xml', 'model_b.xml')
+
+# Exclude noisy time-windowed metrics (author counts, commit counts, etc.)
+compare_model = mc.compare('model_a.xml', 'model_b.xml', exclude_attrs=SLIDING_WINDOW_ATTRS)
+
+# Compare in-memory models
+compare_model = mc.compareModels(model1, model2, exclude_attrs={'commit_count_30', 'author_list_7'})
+
+# Inspect results
+mc.printCompareInfos(compare_model)
+```
+
+The `exclude_attrs` parameter accepts a set of attribute names to ignore during comparison. Use `SLIDING_WINDOW_ATTRS` as a preset to suppress time-windowed metric noise (author/commit/bug counts at various time windows).
+
 ## File Locations
 
 - Source code: `src/sgraph/`

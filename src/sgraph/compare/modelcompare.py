@@ -5,7 +5,7 @@ import sys
 from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.compare.attributecomparison import compare_attrs
 from sgraph.compare.comparegraphattrs import CompareGraphAttrs
-from sgraph.compare.compareutils import tag_change_count, debunk_uniqueness
+from sgraph.compare.compareutils import tag_change_count, debunk_uniqueness, ignoredAttrs
 from sgraph.compare.renamedetector import RenameDetector
 
 
@@ -14,28 +14,54 @@ class ModelCompare:
     def __init__(self):
         pass
 
-    def compare(self, path1: str, path2: str):
+    def compare(self, path1: str, path2: str, exclude_attrs: set[str] | None = None):
+        """Compare two models loaded from file paths.
+
+        Args:
+            exclude_attrs: Attribute names to ignore during comparison (e.g. SLIDING_WINDOW_ATTRS).
+        """
         model1 = SGraph.parse_xml_or_zipped_xml(path1)
         model2 = SGraph.parse_xml_or_zipped_xml(path2)
-        return self.compareModels(model1, model2)
+        return self.compareModels(model1, model2, exclude_attrs=exclude_attrs)
 
-    def compareModels(self, model1: SGraph, model2: SGraph, rename_detection: bool = False):
-        rootNode = SElement(None, '')
-        compareModel = SGraph(rootNode)
-        createdDeps: list[SElementAssociation] = []
-        removedDeps: list[SElementAssociation] = []
+    def compareModels(self, model1: SGraph, model2: SGraph, rename_detection: bool = False,
+                      exclude_attrs: set[str] | None = None):
+        """Compare two in-memory models and produce a compare model annotating differences.
 
-        # If there is already a attr_temporary.csv that has been "spoiling" the compare,
-        # by introducing some removed elements to the B model that should not be there..
-        model2.rootNode.removeDescendantsIf(
-            lambda x: 'compare' in x.attrs and x.attrs['compare'] == 'removed')
-        self.compareWith(model1, model2, compareModel, True, createdDeps, removedDeps,
-                         rename_detection)
-        for r in createdDeps:
-            r.addAttribute("compare", "added")
-        for r in removedDeps:
-            r.addAttribute("compare", "removed")
-        return compareModel
+        Args:
+            exclude_attrs: Additional attribute names to ignore during comparison.
+                Use ``SLIDING_WINDOW_ATTRS`` from ``compareutils`` to suppress
+                time-windowed metric noise.
+
+        Note:
+            exclude_attrs temporarily extends the global ``ignoredAttrs`` set for the
+            duration of the comparison and restores it afterwards.  Not thread-safe if
+            called concurrently with different exclude_attrs values.
+        """
+        added_to_ignored = set()
+        if exclude_attrs:
+            added_to_ignored = exclude_attrs - ignoredAttrs
+            ignoredAttrs.update(added_to_ignored)
+
+        try:
+            rootNode = SElement(None, '')
+            compareModel = SGraph(rootNode)
+            createdDeps: list[SElementAssociation] = []
+            removedDeps: list[SElementAssociation] = []
+
+            # If there is already a attr_temporary.csv that has been "spoiling" the compare,
+            # by introducing some removed elements to the B model that should not be there..
+            model2.rootNode.removeDescendantsIf(
+                lambda x: 'compare' in x.attrs and x.attrs['compare'] == 'removed')
+            self.compareWith(model1, model2, compareModel, True, createdDeps, removedDeps,
+                             rename_detection)
+            for r in createdDeps:
+                r.addAttribute("compare", "added")
+            for r in removedDeps:
+                r.addAttribute("compare", "removed")
+            return compareModel
+        finally:
+            ignoredAttrs.difference_update(added_to_ignored)
 
     # self == SGraph
     def compareWith(
