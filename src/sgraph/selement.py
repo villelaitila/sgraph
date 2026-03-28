@@ -25,17 +25,25 @@ class SElement:
     _incoming_index: dict[tuple[int, str], "SElementAssociation"]
 
     def __init__(self, parent: Optional['SElement'], name: str):
-        """
-        Creates an element and attach it under the given parent.
-         Only case when the parent may be None, is when creating the root element for the graph,
-        or in case of detached elements.
+        """Create an element and **immediately** attach it under *parent*.
 
-        :param parent: the parent element (optional), in the end, every element needs parent except the root.
-        :param name: name of the element, '/' is normalized to '__slash__'
+        The new element is added to ``parent.children`` and
+        ``parent.childrenDict`` during construction.  There is no need to
+        call :meth:`addChild` afterwards — doing so would trigger a merge
+        or raise :class:`SElementMergedException`.
+
+        Pass ``parent=None`` only when creating the graph root or a
+        temporarily detached element.
+
+        Args:
+            parent: Parent element (``None`` for root / detached).
+            name: Element name.  ``'/'`` characters are normalised to
+                ``'__slash__'``.
+
         Raises:
-            Exception: If parent equals self (self loop).
-            SElementMergedException: If an element with the same name already exists
-                under the parent (in non-DEBUG mode).
+            Exception: If *parent* equals *self* (self-loop).
+            SElementMergedException: If an element with the same *name*
+                already exists under *parent*.
         """
         if name == '':
             # sys.stderr.write('Creating with empty name\n')
@@ -85,10 +93,27 @@ class SElement:
             return f'{self.name} ({self.getType()}) {children_info} {outbound_info} {inbound_info}'
 
     def addChild(self, child: "SElement") -> Optional["SElement"]:
-        """
-        Add child, but if there is an overlapping element, merge instead and return merged element.
-        :param child: the child to be added.
-        :return: None or the element where the child has been merged with (differs from child)
+        """Add *child* to this element, merging on name collision.
+
+        If a child with the same name already exists, the new child is
+        **merged** into the existing one and the existing element is
+        returned.
+
+        .. note::
+           ``SElement(parent, name)`` already attaches the new element to
+           *parent* during construction.  Calling ``parent.addChild(elem)``
+           **again** will trigger the merge/duplicate path — this is almost
+           never what you want for freshly constructed elements.
+
+        Args:
+            child: Element to add.
+
+        Returns:
+            ``None`` if the child was added as-is, or the **existing**
+            element that *child* was merged into.
+
+        Raises:
+            Exception: If *child* is *self* (self-loop).
         """
         if child == self:
             sys.stderr.write('Error with data model loop\n')
