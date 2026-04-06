@@ -6,7 +6,7 @@ from sgraph.query.evaluator import evaluate
 from sgraph.query.parser import parse
 
 
-def query(model: SGraph, expression: str) -> SGraph:
+def query(model: SGraph, expression: str, max_depth: int = 20) -> SGraph:
     """Execute an SGraph Query Language expression against a model.
 
     Parses *expression* into an AST and evaluates it against *model*,
@@ -22,6 +22,7 @@ def query(model: SGraph, expression: str) -> SGraph:
             '@type=file AND @loc>500'
             '"/src/web" --> "/src/db"'
             '"/" AND NOT "/External"'
+        max_depth: Maximum hop count for chain search (``--->``). Defaults to 20.
 
     Returns:
         A new :class:`~sgraph.SGraph` with matching elements and their
@@ -47,4 +48,4 @@ def query(model: SGraph, expression: str) -> SGraph:
         result = query(model, '"/" AND NOT "/External"')
     """
     ast = parse(expression)
-    return evaluate(ast, model, total_model=model)
+    return evaluate(ast, model, total_model=model, max_depth=max_depth)

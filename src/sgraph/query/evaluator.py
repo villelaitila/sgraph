@@ -54,13 +54,19 @@ from sgraph.query.expressions import (
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def evaluate(expr: Expression, model: SGraph, total_model: Optional[SGraph] = None) -> SGraph:
+def evaluate(
+    expr: Expression,
+    model: SGraph,
+    total_model: Optional[SGraph] = None,
+    max_depth: int = 20,
+) -> SGraph:
     """Evaluate *expr* against *model* and return a new filtered SGraph.
 
     Args:
         expr: Parsed AST node.
         model: Model to filter (accumulates through AND chains).
         total_model: Original unfiltered model for NOT complement. Defaults to *model*.
+        max_depth: Maximum hop count for chain search (``--->``). Defaults to 20.
 
     Returns:
         A new :class:`~sgraph.SGraph` with only matching elements.
@@ -73,20 +79,20 @@ def evaluate(expr: Expression, model: SGraph, total_model: Optional[SGraph] = No
     if isinstance(expr, KeywordExpr):
         return _eval_keyword(expr, model)
     if isinstance(expr, AndExpr):
-        left = evaluate(expr.left, model, total)
-        return evaluate(expr.right, left, total)
+        left = evaluate(expr.left, model, total, max_depth=max_depth)
+        return evaluate(expr.right, left, total, max_depth=max_depth)
     if isinstance(expr, OrExpr):
-        left = evaluate(expr.left, model, total)
-        right = evaluate(expr.right, model, total)
+        left = evaluate(expr.left, model, total, max_depth=max_depth)
+        right = evaluate(expr.right, model, total, max_depth=max_depth)
         return _union(left, right)
     if isinstance(expr, NotExpr):
         return _eval_not(expr, model, total)
     if isinstance(expr, ParenExpr):
-        return evaluate(expr.inner, model, total)
+        return evaluate(expr.inner, model, total, max_depth=max_depth)
     if isinstance(expr, DepSearchExpr):
         return _eval_dep_search(expr, model, total)
     if isinstance(expr, ChainSearchExpr):
-        return _eval_chain_search(expr, model, total)
+        return _eval_chain_search(expr, model, total, max_depth=max_depth)
     if isinstance(expr, ShortestPathExpr):
         return _eval_shortest_path(expr, model, total)
 
@@ -529,11 +535,17 @@ def _descendants(elements: list[SElement]) -> set[SElement]:
 # Chain search  ( ---> )
 # ---------------------------------------------------------------------------
 
-_CHAIN_MAX_DEPTH = 20
+def _eval_chain_search(
+    expr: ChainSearchExpr,
+    model: SGraph,
+    total: SGraph,
+    max_depth: int = 20,
+) -> SGraph:
+    """Find all directed multi-hop chains FROM → ... → TO via DFS.
 
-
-def _eval_chain_search(expr: ChainSearchExpr, model: SGraph, total: SGraph) -> SGraph:
-    """Find all directed multi-hop chains FROM → ... → TO via DFS."""
+    *max_depth* caps the number of hops the DFS will follow from each
+    starting element. Defaults to 20.
+    """
     from_originals = _resolve_endpoint(expr.from_expr, total)
     to_originals = _resolve_endpoint(expr.to_expr, total)
     is_wildcard_to = expr.to_expr is None
@@ -565,7 +577,7 @@ def _eval_chain_search(expr: ChainSearchExpr, model: SGraph, total: SGraph) -> S
         return path in to_paths
 
     def dfs(elem: SElement, visited: set[str], chain: list[SElementAssociation], depth: int) -> None:
-        if depth > _CHAIN_MAX_DEPTH:
+        if depth > max_depth:
             return
         for a in elem.outgoing:
             if not edge_ok(a):
