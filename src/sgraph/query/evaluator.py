@@ -59,6 +59,7 @@ def evaluate(
     model: SGraph,
     total_model: Optional[SGraph] = None,
     max_depth: int = 20,
+    chain_collector: Optional[list] = None,
 ) -> SGraph:
     """Evaluate *expr* against *model* and return a new filtered SGraph.
 
@@ -67,6 +68,12 @@ def evaluate(
         model: Model to filter (accumulates through AND chains).
         total_model: Original unfiltered model for NOT complement. Defaults to *model*.
         max_depth: Maximum hop count for chain search (``--->``). Defaults to 20.
+        chain_collector: Optional list that receives one ordered tuple of
+            :class:`SElement` instances per discovered chain when the
+            expression contains a chain search (``--->``). Pass ``None``
+            to skip path tracking. Chains discovered inside a NOT branch
+            are NOT collected (they would be the *excluded* set, not the
+            user-visible result).
 
     Returns:
         A new :class:`~sgraph.SGraph` with only matching elements.
@@ -79,20 +86,29 @@ def evaluate(
     if isinstance(expr, KeywordExpr):
         return _eval_keyword(expr, model)
     if isinstance(expr, AndExpr):
-        left = evaluate(expr.left, model, total, max_depth=max_depth)
-        return evaluate(expr.right, left, total, max_depth=max_depth)
+        left = evaluate(expr.left, model, total, max_depth=max_depth,
+                        chain_collector=chain_collector)
+        return evaluate(expr.right, left, total, max_depth=max_depth,
+                        chain_collector=chain_collector)
     if isinstance(expr, OrExpr):
-        left = evaluate(expr.left, model, total, max_depth=max_depth)
-        right = evaluate(expr.right, model, total, max_depth=max_depth)
+        left = evaluate(expr.left, model, total, max_depth=max_depth,
+                        chain_collector=chain_collector)
+        right = evaluate(expr.right, model, total, max_depth=max_depth,
+                         chain_collector=chain_collector)
         return _union(left, right)
     if isinstance(expr, NotExpr):
+        # Chains inside a NOT are the EXCLUDED set; don't surface them.
         return _eval_not(expr, model, total)
     if isinstance(expr, ParenExpr):
-        return evaluate(expr.inner, model, total, max_depth=max_depth)
+        return evaluate(expr.inner, model, total, max_depth=max_depth,
+                        chain_collector=chain_collector)
     if isinstance(expr, DepSearchExpr):
         return _eval_dep_search(expr, model, total)
     if isinstance(expr, ChainSearchExpr):
-        return _eval_chain_search(expr, model, total, max_depth=max_depth)
+        return _eval_chain_search(
+            expr, model, total, max_depth=max_depth,
+            chain_collector=chain_collector,
+        )
     if isinstance(expr, ShortestPathExpr):
         return _eval_shortest_path(expr, model, total)
 
@@ -540,11 +556,17 @@ def _eval_chain_search(
     model: SGraph,
     total: SGraph,
     max_depth: int = 20,
+    chain_collector: Optional[list] = None,
 ) -> SGraph:
     """Find all directed multi-hop chains FROM → ... → TO via DFS.
 
     *max_depth* caps the number of hops the DFS will follow from each
     starting element. Defaults to 20.
+
+    *chain_collector*, when provided, receives one entry per discovered
+    chain. Each entry is a tuple of original-model :class:`SElement`
+    instances in start-to-end order. Callers that want only the
+    sub-graph (no path enumeration) pass ``None``.
     """
     from_originals = _resolve_endpoint(expr.from_expr, total)
     to_originals = _resolve_endpoint(expr.to_expr, total)
@@ -598,6 +620,19 @@ def _eval_chain_search(
                 if aid not in found_assoc_ids:
                     found_assoc_ids.add(aid)
                     chain_assocs.append(a)
+
+                # Record the ordered element tuple for this chain when
+                # the caller asked for it. The chain starts at the DFS
+                # root (``fe``) and ends at the matched ``target``.
+                if chain_collector is not None:
+                    ordered = (
+                        (chain[0].fromElement,) if chain
+                        else (a.fromElement,)
+                    )
+                    ordered = ordered + tuple(c.toElement for c in chain)
+                    ordered = ordered + (target,)
+                    chain_collector.append(ordered)
+
                 # Continue DFS through this node too (more chains possible)
                 new_visited = visited | {target_path}
                 dfs(target, new_visited, chain + [a], depth + 1)

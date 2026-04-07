@@ -130,21 +130,31 @@ def create_test_model() -> SGraph:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def get_all_paths(result_model: SGraph) -> set[str]:
-    """Collect every element path present in the result model."""
+def get_all_paths(result) -> set[str]:
+    """Collect every element path present in the query result.
+
+    Accepts either a :class:`QueryResult` (the new public API) or a
+    raw :class:`SGraph` (used by some legacy tests that still call
+    :func:`evaluate` directly).
+    """
+    sub = result.subgraph if hasattr(result, 'subgraph') else result
     paths: set[str] = set()
-    result_model.rootNode.traverseElements(lambda e: paths.add(e.getPath()))
+    sub.rootNode.traverseElements(lambda e: paths.add(e.getPath()))
     return paths
 
 
-def get_all_associations(result_model: SGraph) -> list[SElementAssociation]:
-    """Collect all associations reachable from the result model's root."""
+def get_all_associations(result) -> list[SElementAssociation]:
+    """Collect all associations reachable from the query result's root.
+
+    Accepts either a :class:`QueryResult` or a raw :class:`SGraph`.
+    """
+    sub = result.subgraph if hasattr(result, 'subgraph') else result
     assocs: list[SElementAssociation] = []
 
     def collect(e: SElement) -> None:
         assocs.extend(e.outgoing)
 
-    result_model.rootNode.traverseElements(collect)
+    sub.rootNode.traverseElements(collect)
     # Deduplicate by identity
     return list({id(a): a for a in assocs}.values())
 
