@@ -29,6 +29,24 @@ from .selementassociation import SElementAssociation
 from .sgraph_utils import ParsingIntentionallyAborted, add_ea, find_assocs_between
 
 
+def _bounded_descendant_count(root: SElement, limit: int) -> tuple[int, bool]:
+    """Count strict descendants of *root*, stopping at *limit*.
+
+    Used by SGraph.__repr__ to keep repr() bounded on huge models.
+    Returns ``(count, hit_limit)`` where ``hit_limit`` is True iff the walk
+    was truncated.
+    """
+    count = 0
+    stack: list[SElement] = list(root.children)
+    while stack:
+        node = stack.pop()
+        count += 1
+        if count >= limit:
+            return count, True
+        stack.extend(node.children)
+    return count, False
+
+
 class SGraph:
     rootNode: SElement
     # modelAttrs: dict[str, str] | dict[str, dict[str, str]]
@@ -43,6 +61,36 @@ class SGraph:
         self.metaAttrs = {}
         self.propagateActions = []
         self.totalModel = None
+
+    # repr() can be triggered by debuggers, exception formatters and any
+    # logger.debug('%r', graph) call. A full O(N) tree walk on multi-million
+    # node models would stall those code paths, so we cap the count.
+    _REPR_COUNT_LIMIT = 10000
+
+    def __repr__(self) -> str:
+        try:
+            children = self.rootNode.children
+            identity = hex(id(self))
+            element_count, hit_limit = _bounded_descendant_count(
+                self.rootNode, self._REPR_COUNT_LIMIT)
+            count_str = f'{element_count}+' if hit_limit else str(element_count)
+
+            if not children:
+                return f'<SGraph empty elements=0 id={identity}>'
+            if len(children) == 1:
+                root_name = children[0].name or '?'
+                return (f'<SGraph root=/{root_name} '
+                        f'elements={count_str} id={identity}>')
+            names = ','.join((c.name or '?') for c in children[:3])
+            if len(children) > 3:
+                names += ',...'
+                size_part = f' count={len(children)}'
+            else:
+                size_part = ''
+            return (f'<SGraph roots=[{names}]{size_part} '
+                    f'elements={count_str} id={identity}>')
+        except Exception as exc:  # never let repr crash a logger
+            return f'<SGraph repr-failed={type(exc).__name__} id={hex(id(self))}>'
 
     def addPropagateAction(self, a: str, v: str):
         self.propagateActions.append((a, v))

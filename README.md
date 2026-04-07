@@ -85,7 +85,7 @@ Creating a simple model:
 >>> from sgraph import SElementAssociation
 >>> x = SGraph(SElement(None, ''))
 >>> x
-<sgraph.sgraph.SGraph object at 0x7f2efae9ad30>
+<SGraph empty elements=0 id=0x7f2efae9ad30>
 
 >>> x.to_deps(fname=None)
 
