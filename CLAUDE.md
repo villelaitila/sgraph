@@ -1,12 +1,37 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents (Claude Code, Codex, Gemini CLI, and similar) when working with code in this repository. The content is intentionally agent-agnostic; only the filename follows the `CLAUDE.md` convention.
 
 ## Project Overview
 
 sgraph is a Python library for working with hierarchic graph structures, typically used for representing software architectures. It provides data formats, structures, and algorithms for analyzing and manipulating software dependency graphs.
 
 The library is maintained by Softagram and is used for building information models about analyzed software. See also [sgraph-mcp-server](https://github.com/softagram/sgraph-mcp-server) for AI agent integration.
+
+## Repository Model (Fork-Based Contribution)
+
+The canonical repository is `softagram/sgraph`. Contributors are expected to work from **personal forks** using the standard fork-and-PR model.
+
+A typical working clone has two remotes:
+
+| Remote | Purpose | Example URL |
+|--------|---------|-------------|
+| `origin` | Your personal fork (push target for feature branches) | `git@github.com:<you>/sgraph.git` |
+| `upstream` | The canonical Softagram repository (source of truth for `main`) | `git@github.com:softagram/sgraph.git` |
+
+**Important for coding agents:** when checking whether a branch's commits are already merged, always compare against `upstream/main`, not just `origin/main`. A contributor's fork may lag behind upstream, so commits that appear "unmerged" relative to `origin/main` can in fact already be live in the canonical repo.
+
+```bash
+# Always fetch both before reasoning about merge state
+git fetch origin main
+git fetch upstream main
+
+# Are this branch's commits in the canonical main?
+git rev-list --left-right --count upstream/main...HEAD
+# → "N 0" means all HEAD commits are already in upstream/main (safe to switch/delete branch)
+```
+
+New contributors: fork `softagram/sgraph` on GitHub, clone your fork as `origin`, and add `softagram/sgraph` as `upstream`. Open PRs from feature branches on your fork against `softagram/sgraph:main`.
 
 ## Development Commands
 
