@@ -15,6 +15,7 @@ import codecs
 from collections.abc import Sequence
 import io
 import os
+import re
 import sys
 import uuid
 import xml.sax.handler
@@ -155,6 +156,11 @@ class SGraph:
         for e in self.rootNode.children:
             traverser(e)
 
+    # C0 control characters that XML 1.0 forbids in any content (see
+    # https://www.w3.org/TR/xml/#charsets). TAB (0x09), LF (0x0A) and CR (0x0D)
+    # are allowed and handled explicitly during escaping.
+    _XML_INVALID_CONTROL_RE = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
     def to_xml(self, fname: str | None, stdout: bool = True) -> str | None:
         rootNode = self.rootNode
         counter = Counter()
@@ -218,6 +224,7 @@ class SGraph:
                 # Forbidden chars are: naked ampersand, left angle bracket, double quote
                 # single quote is fine as we are using double quotes in XML for attributes
                 v = v.encode('utf-8', 'replace').decode()
+                v = SGraph._XML_INVALID_CONTROL_RE.sub('', v)
                 return v.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(
                     '\n', '&' + '#' + '10;').replace('"', '&quot;')
             return ''

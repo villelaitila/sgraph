@@ -1,4 +1,5 @@
 import copy
+import io
 import os
 from typing import Any
 
@@ -121,3 +122,32 @@ def test_repr_multi_root_omits_count_when_small():
     text = repr(graph)
     assert 'nginx' in text and 'bar' in text
     assert 'count=' not in text
+
+
+def test_to_xml_strips_invalid_control_chars_and_roundtrips():
+    """Attribute values containing C0 control chars forbidden by XML 1.0 must
+    be sanitised so that the serialised model parses back cleanly."""
+    from sgraph.selement import SElement
+
+    graph = SGraph()
+    repo = SElement(graph.rootNode, 'repo')
+    elem = SElement(repo, 'file.py')
+
+    c0_controls = ''.join(chr(i) for i in range(0x20) if i not in (0x09, 0x0A, 0x0D))
+    nasty = f'before{c0_controls}after<&"\'>{chr(0x7F)} tab\there'
+    elem.attrs['description'] = nasty
+
+    xml = graph.to_xml(None, stdout=False)
+    assert xml is not None
+    parsed = SGraph.parse_xml_file_or_stream(io.StringIO(xml))
+
+    repo_node = parsed.rootNode.children[0]
+    file_node = next(c for c in repo_node.children if c.name == 'file.py')
+    got = file_node.attrs['description']
+
+    # All C0 chars except TAB/LF/CR must be stripped.
+    for ch in c0_controls:
+        assert ch not in got, f'control char {ch!r} leaked into parsed attribute'
+    # The visible content must survive intact.
+    assert got.startswith('before')
+    assert 'after<&"\'>' in got
