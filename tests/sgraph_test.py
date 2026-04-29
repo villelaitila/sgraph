@@ -150,4 +150,4 @@ def test_to_xml_strips_invalid_control_chars_and_roundtrips():
         assert ch not in got, f'control char {ch!r} leaked into parsed attribute'
     # The visible content must survive intact.
     assert got.startswith('before')
-    assert 'afterxxx'.replace('xxx', '<&"\'>') in got or 'after<&"\'>' in got
+    assert 'after<&"\'>' in got
