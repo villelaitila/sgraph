@@ -14,15 +14,20 @@ class ModelCompare:
     def __init__(self):
         pass
 
-    def compare(self, path1: str, path2: str, exclude_attrs: set[str] | None = None):
+    def compare(self, path1: str, path2: str, exclude_attrs: set[str] | None = None,
+                rename_detection: bool = False):
         """Compare two models loaded from file paths.
 
         Args:
             exclude_attrs: Attribute names to ignore during comparison (e.g. SLIDING_WINDOW_ATTRS).
+            rename_detection: When True, detect renamed elements and annotate them
+                (``renamed``/``old_name``) instead of reporting a separate add and
+                removal. Forwarded to :meth:`compareModels`.
         """
         model1 = SGraph.parse_xml_or_zipped_xml(path1)
         model2 = SGraph.parse_xml_or_zipped_xml(path2)
-        return self.compareModels(model1, model2, exclude_attrs=exclude_attrs)
+        return self.compareModels(model1, model2, rename_detection=rename_detection,
+                                  exclude_attrs=exclude_attrs)
 
     def compareModels(self, model1: SGraph, model2: SGraph, rename_detection: bool = False,
                       exclude_attrs: set[str] | None = None):

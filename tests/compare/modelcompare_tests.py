@@ -107,3 +107,33 @@ def test_sliding_window_attrs_preset():
     # Should not contain structural attrs
     assert 'hash' not in SLIDING_WINDOW_ATTRS
     assert 'loc' not in SLIDING_WINDOW_ATTRS
+
+
+def _write_single_child(path, name):
+    """Write a model whose only leaf is /p/src/<name>."""
+    m = SGraph(SElement(None, ''))
+    m.createOrGetElementFromPath('/p/src/' + name)
+    m.to_xml(str(path))
+
+
+def test_compare_rename_detection_passthrough(tmp_path):
+    """compare(rename_detection=True) must apply rename detection like compareModels does."""
+    a = tmp_path / 'a.xml'
+    b = tmp_path / 'b.xml'
+    _write_single_child(a, 'alpha.py')
+    _write_single_child(b, 'beta.py')
+
+    mc = ModelCompare()
+
+    # Default: no rename detection -> beta is a new element, not a rename.
+    plain = mc.compare(str(a), str(b))
+    plain_beta = plain.findElementFromPath('/p/src/beta.py')
+    assert plain_beta is not None
+    assert plain_beta.attrs.get('renamed') != 'true'
+
+    # rename_detection=True -> beta is annotated as a rename of alpha.
+    renamed = mc.compare(str(a), str(b), rename_detection=True)
+    beta = renamed.findElementFromPath('/p/src/beta.py')
+    assert beta is not None
+    assert beta.attrs.get('renamed') == 'true'
+    assert beta.attrs.get('old_name') == 'alpha.py'
