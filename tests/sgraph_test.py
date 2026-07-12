@@ -151,3 +151,10 @@ def test_to_xml_strips_invalid_control_chars_and_roundtrips():
     # The visible content must survive intact.
     assert got.startswith('before')
     assert 'after<&"\'>' in got
+
+
+def test_version_attribute():
+    import sgraph
+
+    assert isinstance(sgraph.__version__, str)
+    assert sgraph.__version__ != ''
