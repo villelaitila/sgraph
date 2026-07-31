@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from sgraph import SGraph, SElement
 
@@ -61,12 +61,83 @@ def parents_parent_or_parent_name_equals(elem, name):
     return elem.parent.parent and elem.parent.parent.name == name
 
 
-def bom_ref(elem, v):
-    pkgid = elem.name  # todo also use url like github.com/foo/reponame
-    if 'from' in elem.attrs:
-        pkgid = elem.name
+# purl requires the type to start with a letter and to hold only [a-z0-9.-] in its canonical
+# form (https://github.com/package-url/purl-spec), so an unresolved ecosystem cannot be spelled
+# '???'. That yields purls a purl-parsing consumer rejects, leaving the component unmatchable
+# against vulnerability data. 'generic' is the purl type for packages that fit no other type,
+# and the only registered type with no default package repository — which is exactly the case
+# for a binary committed into source control.
+FALLBACK_PURL_TYPE = 'generic'
 
-    pkgid = clean_name(pkgid)
+# Ecosystem signal for binaries committed straight into a repository: their repotype names no
+# ecosystem (the analyzer's own declaration that it could not identify one) and they have no
+# ecosystem-named ancestor, so the extension of the file referencing them is the only remaining
+# signal.
+#
+# A type is inferred only when the inferred name is by itself a complete identifier for that type.
+# nuget prohibits a namespace, so the assembly name is the whole identity and inference yields a
+# complete, matchable identifier.
+# maven requires a groupId that no file extension can supply, so inference cannot yield a complete
+# identifier at all: .jar/.war/.aar are deliberately unmapped and fall through to the fallback.
+# Same rule, opposite outcomes, because the type definitions differ. pypi and gem also prohibit a
+# namespace, so whl/egg/gem are safe to infer.
+#
+# This fixes the purl TYPE only. Package names are still emitted unencoded throughout this
+# module, so a spec-valid type does not by itself make a purl spec-conforming.
+PURL_TYPE_BY_REFERENCING_EXTENSION = {
+    'dll': 'nuget',
+    'exe': 'nuget',
+    'nupkg': 'nuget',
+    'whl': 'pypi',
+    'egg': 'pypi',
+    'gem': 'gem',
+}
+
+PURL_TYPE_SOURCE_PROPERTY = 'purlTypeResolution'
+
+
+def infer_pkgtype_from_referencing_files(elem):
+    """Infer a purl type from the extensions of the files referencing this element.
+
+    Associations onto the element's parent count as well, mirroring
+    produce_source_code_references: a reference often lands on the package directory rather than
+    on its versioned child. A reference onto a directory therefore votes for every element under
+    that directory whose type is not resolved by some stronger signal.
+
+    Ties are broken alphabetically so generated SBOMs stay byte-stable between runs, independent
+    of association traversal order. Only the extensions that voted for the winning type are
+    reported, so the provenance never cites evidence that argued for a different type.
+
+    :param elem: the external element whose purl type is being resolved
+    :return: (pkgtype, extensions) or (None, []) when no referencing file gives a hint.
+    """
+    votes = Counter()
+    extensions_by_pkgtype = defaultdict(set)
+    incoming = elem.incoming + (elem.parent.incoming if elem.parent else [])
+    for association in incoming:
+        extension = file_extension(association.fromElement).lower()
+        pkgtype = PURL_TYPE_BY_REFERENCING_EXTENSION.get(extension)
+        if pkgtype is not None:
+            votes[pkgtype] += 1
+            extensions_by_pkgtype[pkgtype].add(extension)
+    if not votes:
+        return None, []
+    winner = min(votes, key=lambda candidate: (-votes[candidate], candidate))
+    return winner, sorted(extensions_by_pkgtype[winner])
+
+
+def purl_for(elem, v):
+    """Build the purl of an element and report how its package type was resolved.
+
+    :param elem: the external element to describe
+    :param v: the version string of that element
+    :return: (purl, properties) where properties is a list of CycloneDX property dicts. It is
+             non-empty only when the type was inferred or fell back; a type resolved from an
+             attribute naming an ecosystem, or from an ecosystem-named ancestor, is not a guess
+             and gets no property.
+    """
+    properties: list[dict] = []
+    pkgid = clean_name(elem.name)  # todo also use url like github.com/foo/reponame
     if elem.attrs.get('repotype', '') == 'NPM' or parents_parent_or_parent_name_equals(elem, 'NPM'):
         pkgtype = 'npm'
     elif elem.attrs.get('repotype', '') == 'APT' or parents_parent_or_parent_name_equals(
@@ -79,8 +150,6 @@ def bom_ref(elem, v):
         pkgtype = 'golang'
     elif elem.parent.name == 'Maven':
         pkgtype = 'maven'
-    elif elem.parent.name == 'Java':
-        pkgtype = '??Java'
     elif incoming_deps(elem, ['csproj', 'vbproj'],
                        ['assembly_ref']) or parents_parent_or_parent_name_equals(
                            elem, 'Assemblies'):
@@ -91,10 +160,26 @@ def bom_ref(elem, v):
         if ' of tag ' in pkgid:
             pkgid = pkgid.split(' of tag ')[0]
     else:
-        pkgtype = '???'
+        pkgtype, extensions = infer_pkgtype_from_referencing_files(elem)
+        if pkgtype is not None:
+            properties.append({
+                'name': PURL_TYPE_SOURCE_PROPERTY,
+                'value': 'inferred from referencing file extension: ' + ','.join(extensions)
+            })
+        else:
+            pkgtype = FALLBACK_PURL_TYPE
+            properties.append({'name': PURL_TYPE_SOURCE_PROPERTY, 'value': 'ecosystem unresolved'})
 
     v = v.lstrip('^')
-    return f'pkg:{pkgtype}/{pkgid}@{v}'
+    return f'pkg:{pkgtype}/{pkgid}@{v}', properties
+
+
+def bom_ref(elem, v):
+    """Return only the purl of an element, without its type-resolution provenance.
+
+    Backward-compatible public wrapper around purl_for; do not remove.
+    """
+    return purl_for(elem, v)[0]
 
 
 # TODO License mapping not implemented
@@ -250,13 +335,14 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         v = extract_version(elem)
         if v is None:
             v = ''
-        ref = bom_ref(elem, v)
+        ref, purl_properties = purl_for(elem, v)
 
         direct_deps, indirect_deps = produce_source_code_references(elem, external_root)
         direct_deps_paths = ';'.join(sorted(direct_deps))
 
         custom_properties = []  # noqa
         custom_properties.append({'name': 'sourceCodeReferences', 'value': direct_deps_paths})
+        custom_properties.extend(purl_properties)
 
         if indirect_deps:
             custom_properties.append({'name': 'indirectExposureCount', 'value': len(indirect_deps)})
@@ -378,10 +464,13 @@ def analyze_3rdparty(external_root, sbom):
     """
 
     stack = list(external_root.children)
+    seen_refs = set()
     while stack:
         elem = stack.pop(0)
         for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root):
-            sbom.components.append(bom_component)
+            if bom_component['bom-ref'] not in seen_refs:
+                seen_refs.add(bom_component['bom-ref'])
+                sbom.components.append(bom_component)
         stack += elem.children
 
 
