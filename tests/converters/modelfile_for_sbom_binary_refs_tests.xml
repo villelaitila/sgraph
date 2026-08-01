@@ -1,0 +1,130 @@
+<model version="2.1">
+  <elements>
+    <e n="ExampleOrg">
+      <e n="repoA">
+        <e n="src">
+          <e i="10" n="Consumer.csproj" t="file">
+            <r r="60" t="assembly_ref" />
+          </e>
+          <e i="11" n="Consumer.dll" t="file">
+            <r r="30" t="ref" />
+          </e>
+          <e i="12" n="Runner.exe" t="file">
+            <r r="31" t="ref" />
+          </e>
+          <e i="13" n="Helper.DLL" t="file">
+            <r r="32" t="ref" />
+          </e>
+          <e i="14" n="Legacy.exe" t="file">
+            <r r="32" t="ref" />
+          </e>
+          <!-- builder.jar is the only reference to JvmBinary, and the only thing distinguishing an
+               unmapped extension from an element with no references at all. That distinction is the
+               premise of test_jar_referenced_binary_falls_back_to_generic. If that premise assertion
+               ever fails, restore this reference rather than relaxing the assertion. -->
+          <e i="15" n="builder.jar" t="file">
+            <r r="33" t="ref" />
+          </e>
+          <e i="16" n="sample_extension.xpi" t="file">
+            <r r="34" t="ref" />
+          </e>
+          <!-- This reference lands on the package directory, not on the versioned leaf. Do not retarget it. -->
+          <e i="17" n="Grouped.dll" t="file">
+            <r r="35" t="ref" />
+          </e>
+          <e i="18" n="packager.gem" t="file">
+            <r r="37" t="ref" />
+          </e>
+          <!-- Deliberate losing vote: nuget ties gem one to one, gem wins alphabetically. Removing this makes the tie break assertion vacuous. -->
+          <e i="19" n="Mixer.dll" t="file">
+            <r r="37" t="ref" />
+          </e>
+          <e i="20" n="Primary.dll" t="file">
+            <r r="39" t="ref" />
+          </e>
+          <e i="21" n="Secondary.dll" t="file">
+            <r r="39" t="ref" />
+          </e>
+          <!-- Deliberate losing vote: one pypi against two nuget. Removing this makes the winner only provenance assertion vacuous. -->
+          <e i="22" n="extra.whl" t="file">
+            <r r="39" t="ref" />
+          </e>
+          <e i="23" n="package.whl" t="file">
+            <r r="40" t="ref" />
+          </e>
+          <e i="24" n="legacy.egg" t="file">
+            <r r="40" t="ref" />
+          </e>
+          <e i="25" n="bundle.nupkg" t="file">
+            <r r="41" t="ref" />
+          </e>
+          <e i="26" n="Dup.dll" t="file">
+            <r r="42" t="ref" />
+          </e>
+          <e i="27" n="Dup.csproj" t="file">
+            <r r="62" t="assembly_ref" />
+          </e>
+          <e i="28" n="App.jar" t="file">
+            <r r="70" t="ref" />
+          </e>
+        </e>
+      </e>
+      <e n="External">
+        <e n="Unknown_Binary_Files">
+          <e n="Ionic.Zip">
+            <e i="30" n="Ionic.Zip of version 1.9.1.8" repotype="Unknown_Binary_Files" />
+          </e>
+          <e n="ExampleTool">
+            <e i="31" n="ExampleTool of version 2.0.1" />
+          </e>
+          <e n="MultiRefBinary">
+            <e i="32" n="MultiRefBinary of version 6.1" />
+          </e>
+          <e n="JvmBinary">
+            <e i="33" n="JvmBinary of version 4.2" />
+          </e>
+          <e n="SampleExtension">
+            <e i="34" n="SampleExtension of version 0.9" repotype="Unknown_Binary_Files" />
+          </e>
+          <e i="35" n="GroupedBinary">
+            <e i="36" n="GroupedBinary of version 3.3" />
+          </e>
+          <e n="MixedRefBinary">
+            <e i="37" n="MixedRefBinary of version 5.0" />
+          </e>
+          <e n="OrphanBinary">
+            <e i="38" n="OrphanBinary of version 7.7" />
+          </e>
+          <e n="MixedVoteBinary">
+            <e i="39" n="MixedVoteBinary of version 8.2" />
+          </e>
+          <e n="PyBinary">
+            <e i="40" n="PyBinary of version 1.2" />
+          </e>
+          <e n="NupkgBinary">
+            <e i="41" n="NupkgBinary of version 3.1" />
+          </e>
+          <e n="DupPackage">
+            <e i="42" n="DupPackage of version 2.5.0" repotype="Unknown_Binary_Files" />
+          </e>
+        </e>
+        <e n="Assemblies">
+          <e n="ExampleOrg.Common">
+            <e i="60" n="ExampleOrg.Common" version="1.4.2" />
+          </e>
+          <e n="DupPackage">
+            <e i="62" n="DupPackage" version="2.5.0" />
+          </e>
+        </e>
+        <e n="Maven">
+          <e i="61" n="org.example.sample sample-lib of version 2.4.1"
+            artifactId="sample-lib" groupId="org.example.sample"
+            repotype="Maven" version="2.4.1" />
+        </e>
+        <e n="Java">
+          <e i="70" n="somelib of version 4.1" />
+        </e>
+      </e>
+    </e>
+  </elements>
+</model>
