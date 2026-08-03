@@ -31,9 +31,22 @@ def valid_for_bom(elem):
     # version-management redirection leaves versionless elements behind after re-pointing their
     # references at versioned ones, and coordinates alone cannot tell those husks apart from a
     # BOM-managed dependency something still uses.
+    #
+    # parent_version alone deliberately does NOT qualify. Stored models predating
+    # coordinate-carrying parents hold parent_version-only elements, and admitting them splices
+    # the space-bearing element name into a generic purl. On models that do carry coordinates,
+    # the coordinate branch already admits every parent, so a parent_version clause would add
+    # nothing there and regress everything before.
+    #
+    # The coordinates must also be usable, not merely present: charset-rejected ones (a ${}
+    # groupId resolved only in an external parent) build no maven purl, and versionless there
+    # is nothing spec-clean left to emit — the fallback would splice the space-bearing element
+    # name into a generic purl.
     return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name \
-           or 'license' in elem.attrs or 'parent_version' in elem.attrs \
-           or ('groupId' in elem.attrs and 'artifactId' in elem.attrs and bool(elem.incoming))
+           or 'license' in elem.attrs \
+           or (is_maven_coordinate(elem.attrs.get('groupId', ''))
+               and is_maven_coordinate(elem.attrs.get('artifactId', ''))
+               and bool(elem.incoming))
 
 
 def extract_version(elem):
@@ -333,13 +346,16 @@ def maven_purl(elem, version):
     purl version must be percent-encoded, so the expression would be either non-canonical raw or
     canonical-but-unmatchable encoded; omitting it yields a purl that is canonical and still
     matches at package level. An empty version takes the same branch: appending it would leave a
-    trailing '@', which is not a canonical versionless purl but a malformed versioned one.
+    trailing '@', which is not a canonical versionless purl but a malformed versioned one. So
+    does a semicolon-joined multi-value, the shape attribute transfer produces when two poms
+    name one parent at different versions: it asserts a version that exists nowhere, while the
+    raw value stays disclosed in the component's version field.
     """
     group_id = elem.attrs.get('groupId', '')
     artifact_id = elem.attrs.get('artifactId', '')
     if not (is_maven_coordinate(group_id) and is_maven_coordinate(artifact_id)):
         return None
-    if not version or is_unresolved_version(version):
+    if not version or ';' in version or is_unresolved_version(version):
         return f'pkg:maven/{group_id}/{artifact_id}'
     return f'pkg:maven/{group_id}/{artifact_id}@{version}'
 
@@ -437,6 +453,9 @@ def purl_for(elem, v):
         # Disclosed rather than dropped: the raw value stays in the component's version field,
         # and this property records why the purl carries no version.
         properties.append({'name': VERSION_SOURCE_PROPERTY, 'value': v})
+    # The versionless-inclusion rule made an empty version reachable here, not only in
+    # maven_purl: charset-rejected coordinates drop a versionless element to this splice.
+    if not v:
         return f'pkg:{pkgtype}/{pkgid}', properties
     return f'pkg:{pkgtype}/{pkgid}@{v}', properties
 
