@@ -452,16 +452,68 @@ def test_maven_coordinate_guard_does_more_than_reject_whitespace():
     assert len(whitespace_bearing) == 3
 
 
-def test_maven_coordinates_fixture_yields_five_distinct_components():
+def test_maven_coordinates_fixture_yields_seven_distinct_components():
     """Anti-vacuity for the fixture, and the collapse guard for version omission.
 
     A lookup above raises when an element vanishes, but an element added, or two bom-refs
-    collapsed into one when a version is omitted, would otherwise go unnoticed.
+    collapsed into one when a version is omitted, would otherwise go unnoticed. Seven, not
+    eight: husk-lib exists in the fixture and must not be counted here.
     """
     model, _ = get_model_and_model_api(MAVEN_COORDINATES_MODEL)
     sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
-    assert len(sbom['components']) == 5
-    assert len({component['bom-ref'] for component in sbom['components']}) == 5
+    assert len(sbom['components']) == 7
+    assert len({component['bom-ref'] for component in sbom['components']}) == 7
+
+
+# --- version-managed dependency tests ---
+
+
+def test_a_referenced_versionless_dependency_is_still_a_component():
+    """A dependency version-managed by an imported BOM has no version anywhere in the model.
+
+    The version is real but lives inside an artifact the analyzer never parses, so requiring a
+    version for inclusion drops exactly the dependencies modern Maven declares: the more a
+    project centralizes versions in parents and BOMs, the emptier its SBOM. A versionless maven
+    purl is canonical and still matches at package level — the same trade the
+    unresolved-expression case above already accepted.
+    """
+    component = get_maven_coordinate_components()['org.example.managed managed-lib']
+    assert component['purl'] == 'pkg:maven/org.example.managed/managed-lib'
+    assert component['version'] == ''
+    assert purl_type_resolution(component) is None
+
+
+def test_an_unreferenced_versionless_element_is_not_swept_in():
+    """The inclusion rule for versionless elements is incoming references, not existence.
+
+    Version-management redirection re-points references at versioned elements and leaves the
+    versionless originals behind with none. husk-lib is the control for managed-lib: identical
+    shape, no incoming reference. Without it the rule could decay into plain coordinate
+    presence and every other assertion would stay green.
+    """
+    assert 'org.example.husk husk-lib' not in get_maven_coordinate_components()
+
+
+def test_parent_version_supplies_the_version_of_an_external_parent_pom():
+    """A parent pom reference records its exact version under parent_version, not version.
+
+    The analyzer read that version out of the <parent> block it parsed, so dropping the
+    component, or emitting it versionless, discards information the model already holds.
+    """
+    component = get_maven_coordinate_components()['org.example.parentpom parent-pom']
+    assert component['purl'] == 'pkg:maven/org.example.parentpom/parent-pom@7.1'
+    assert component['version'] == '7.1'
+
+
+def test_an_explicit_version_outranks_parent_version():
+    """An element that is both a parent and an ordinary dependency keeps its own version.
+
+    No fixture element carries both attributes, deliberately: this ordering is a property of
+    extract_version alone, and a fixture pinning it would couple two orthogonal guards.
+    """
+    elem = SElement(None, 'org.example both')
+    elem.attrs.update(version='1.0', parent_version='2.0')
+    assert sbom_cyclonedx_generator.extract_version(elem) == '1.0'
 
 
 def test_a_partly_resolved_version_keeps_its_version():

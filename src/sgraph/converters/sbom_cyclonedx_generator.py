@@ -27,8 +27,13 @@ def slugify_bom_ref(name: str) -> str:
 
 
 def valid_for_bom(elem):
+    # The coordinate branch demands an incoming reference where the version branches do not:
+    # version-management redirection leaves versionless elements behind after re-pointing their
+    # references at versioned ones, and coordinates alone cannot tell those husks apart from a
+    # BOM-managed dependency something still uses.
     return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name \
-           or 'license' in elem.attrs
+           or 'license' in elem.attrs or 'parent_version' in elem.attrs \
+           or ('groupId' in elem.attrs and 'artifactId' in elem.attrs and bool(elem.incoming))
 
 
 def extract_version(elem):
@@ -49,6 +54,8 @@ def extract_version(elem):
         version = elem.name.split(' of version ')[-1].strip()
     elif ' of tag ' in elem.name:
         version = elem.name.split(' of tag ')[-1].strip()
+    if 'parent_version' in elem.attrs:
+        version = elem.attrs['parent_version']
     if version is None:
         return None
     return version.replace(VERSION_PATH_SEPARATOR_ENCODING, '/')
@@ -325,13 +332,14 @@ def maven_purl(elem, version):
     An unresolved version yields a versionless purl rather than one carrying the expression. A
     purl version must be percent-encoded, so the expression would be either non-canonical raw or
     canonical-but-unmatchable encoded; omitting it yields a purl that is canonical and still
-    matches at package level.
+    matches at package level. An empty version takes the same branch: appending it would leave a
+    trailing '@', which is not a canonical versionless purl but a malformed versioned one.
     """
     group_id = elem.attrs.get('groupId', '')
     artifact_id = elem.attrs.get('artifactId', '')
     if not (is_maven_coordinate(group_id) and is_maven_coordinate(artifact_id)):
         return None
-    if is_unresolved_version(version):
+    if not version or is_unresolved_version(version):
         return f'pkg:maven/{group_id}/{artifact_id}'
     return f'pkg:maven/{group_id}/{artifact_id}@{version}'
 
