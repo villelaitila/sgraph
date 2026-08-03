@@ -116,8 +116,8 @@ def test_multi_sbom_internal_dependencies():
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
 
 # The purl spec requires a type to start with a letter and to hold only [a-z0-9.-] in its
-# canonical form. Only the type is anchored on purpose: name encoding is a separate, pre-existing
-# concern (existing fixtures legitimately produce maven names that contain a space).
+# canonical form. Only the type is anchored here: this pattern predates maven coordinates and
+# still says nothing about namespace, name or version, which other assertions cover.
 PURL_TYPE_PATTERN = re.compile(r'^pkg:[a-z][a-z0-9.-]*/')
 
 
@@ -259,10 +259,10 @@ def test_types_read_from_attributes_or_ancestors_carry_no_provenance():
     assert components['ExampleOrg.Common']['purl'] == 'pkg:nuget/ExampleOrg.Common@1.4.2'
     assert purl_type_resolution(components['ExampleOrg.Common']) is None
     maven_component = components['org.example.sample sample-lib']
-    # Characterization of known-nonconforming output: the name keeps its literal space (names
-    # are emitted unencoded — see the type-only caveat in the generator). A name-encoding fix
-    # should update this expected string, not relax the assertion.
-    assert maven_component['purl'] == 'pkg:maven/org.example.sample sample-lib@2.4.1'
+    # This component is still looked up by a name that carries the space; only the purl stopped
+    # carrying it. Maven ids cannot contain a space, so encoding it as %20 here would have been
+    # spec-valid and still matched nothing.
+    assert maven_component['purl'] == 'pkg:maven/org.example.sample/sample-lib@2.4.1'
     assert purl_type_resolution(maven_component) is None
 
 
@@ -302,3 +302,193 @@ def test_bom_ref_still_returns_only_the_purl_string():
         '/ExampleOrg/External/Unknown_Binary_Files/Ionic.Zip/Ionic.Zip of version 1.9.1.8')
     assert elem is not None
     assert sbom_cyclonedx_generator.bom_ref(elem, '1.9.1.8') == 'pkg:nuget/Ionic.Zip@1.9.1.8'
+
+
+# --- maven coordinate tests ---
+
+MAVEN_COORDINATES_MODEL = 'converters/modelfile_for_sbom_maven_coordinates_tests.xml'
+
+
+def get_maven_coordinate_components():
+    """Generate the maven-coordinate SBOM and index its components by component name."""
+    model, _ = get_model_and_model_api(MAVEN_COORDINATES_MODEL)
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+    return {component['name']: component for component in sbom['components']}
+
+
+def test_maven_coordinates_supply_the_required_groupid_namespace():
+    """The maven type requires a namespace, and the coordinates to build one were already there.
+
+    Pinned as an exact set rather than per fixture: a missing purl and an unexpected extra one
+    both fail, and an empty result cannot pass.
+    """
+    purls = set()
+    for model_file in ('converters/modelfile_for_sbom_tests.xml',
+                       'converters/modelfile_for_sbom_multi_tests.xml',
+                       BINARY_REFS_MODEL):
+        model, _ = get_model_and_model_api(model_file)
+        sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+        purls.update(c['purl'] for c in sbom['components'] if c['purl'].startswith('pkg:maven/'))
+    assert purls == {
+        'pkg:maven/aopalliance/aopalliance@1.0',
+        'pkg:maven/org.apache.commons/commons-lang3@3.12.0',
+        'pkg:maven/org.example.sample/sample-lib@2.4.1',
+    }
+
+
+def test_multi_sbom_dependson_carries_a_well_formed_maven_reference():
+    """A dependsOn entry is a bom-ref, and the maven one used to carry a raw space into it."""
+    model, _ = get_model_and_model_api('converters/modelfile_for_sbom_multi_tests.xml')
+    result = generate_multi_from_sgraph(model, level=3)
+    repo_b_sbom = next(s for s in result if s['metadata']['component']['name'] == 'repoB')
+    repo_b_ref = repo_b_sbom['metadata']['component']['bom-ref']
+    depends_on = next(d for d in repo_b_sbom['dependencies']
+                      if d['ref'] == repo_b_ref)['dependsOn']
+    assert 'pkg:maven/org.apache.commons/commons-lang3@3.12.0' in depends_on
+    assert not any(' ' in reference for reference in depends_on)
+
+
+def test_partial_maven_coordinates_do_not_emit_half_an_identity():
+    """Only one coordinate present must not produce a half-identity. With both coordinates absent,
+    requiring both and requiring either behave identically, so no both-absent fixture can
+    separate them. This element can, and under the relaxed rule it emits a namespace with an
+    empty name.
+    """
+    component = get_maven_coordinate_components()['partial-lib']
+    assert component['purl'] == 'pkg:generic/partial-lib@1.0'
+    assert purl_type_resolution(component) == 'maven coordinates unavailable'
+
+
+def test_maven_element_without_coordinates_takes_the_residual_and_is_not_inferred():
+    """The Maven branch resolves its own fallback rather than falling through to inference.
+
+    The fixture references this element from a .dll, which would vote nuget if the
+    coordinate-less case reached infer_pkgtype_from_referencing_files. Both assertions below
+    therefore separate an honest residual from a guess, which the type alone would not.
+    """
+    component = get_maven_coordinate_components()['coordinateless-lib']
+    assert component['purl'] == 'pkg:generic/coordinateless-lib@2.0'
+    assert purl_type_resolution(component) == 'maven coordinates unavailable'
+
+
+def test_a_purl_legal_character_that_is_not_a_maven_id_takes_the_residual():
+    """A colon is legal in a purl component and can never be a Maven id.
+
+    A purl built from it would be canonical, would pass a conformance checker, and would match
+    nothing. That is why the guard is the Maven id charset and not the purl charset.
+    """
+    component = get_maven_coordinate_components()['colon-lib']
+    assert component['purl'] == 'pkg:generic/colon-lib@3.0'
+    assert purl_type_resolution(component) == 'maven coordinates unavailable'
+
+
+def test_the_residual_value_stays_distinct_from_an_unresolved_ecosystem():
+    """A Maven element with no usable coordinates has a known ecosystem and an unusable name.
+
+    Reusing 'ecosystem unresolved' here would mark as ecosystem-unknown a component whose
+    ecosystem is known, blunting the discriminator the previous release told consumers to grep.
+    """
+    components = get_maven_coordinate_components()
+    residuals = {purl_type_resolution(components[name])
+                 for name in ('partial-lib', 'coordinateless-lib', 'colon-lib')}
+    assert residuals == {'maven coordinates unavailable'}
+    assert 'ecosystem unresolved' not in residuals
+
+
+def test_maven_coordinate_case_is_preserved_in_both_components():
+    """The maven type is case-sensitive in namespace and name, so neither may be lowercased.
+
+    Asserts its own premise: the Maven bucket in this fixture sits under a JVM layer, as analyzer
+    output does, and the branch matches the package element's parent so the extra layer makes no
+    difference. Nothing in the output reveals the layer, so without the premise assertion,
+    flattening the fixture would silently retire the only tracked evidence of that.
+    """
+    model, _ = get_model_and_model_api(MAVEN_COORDINATES_MODEL)
+    elem = model.findElementFromPath(
+        '/ExampleOrg/External/JVM/Maven/Org.Example.Mixed Mixed-Lib of version 4.0')
+    assert elem is not None
+    component = get_maven_coordinate_components()['Org.Example.Mixed Mixed-Lib']
+    assert component['purl'] == 'pkg:maven/Org.Example.Mixed/Mixed-Lib@4.0'
+    assert purl_type_resolution(component) is None
+
+
+def test_an_unresolved_version_yields_a_versionless_purl():
+    """A build-property expression names no published artifact, so the version is omitted.
+
+    Omission is not a workaround: purl treats the version as optional, so the result is canonical
+    and matches at package level, where the raw expression could only ever match nothing. The raw
+    expression stays in the component's version field, so it is disclosed rather than dropped.
+    """
+    component = get_maven_coordinate_components()['org.example.unresolved unresolved-lib']
+    assert component['purl'] == 'pkg:maven/org.example.unresolved/unresolved-lib'
+    assert component['version'] == '${project.version}'
+    assert purl_type_resolution(component) is None
+
+
+def test_maven_coordinate_guard_accepts_real_coordinates():
+    """Anti-vacuity for the guard: it must admit ordinary and uppercase coordinates."""
+    for value in ('org.apache.commons', 'commons-lang3', 'aopalliance', 'HTTPClient'):
+        assert sbom_cyclonedx_generator.is_maven_coordinate(value), value
+
+
+def test_maven_coordinate_guard_does_more_than_reject_whitespace():
+    """Control against simplifying the guard to a space check.
+
+    Only three of the values below contain whitespace at all, asserted rather than claimed, so a
+    guard reduced to a whitespace test would accept the other eight. Two of those eight,
+    'org.example:lib' and 'org.example~lib', purl would leave unencoded: they are what
+    distinguishes a Maven-charset guard from a purl-charset one. '.' and '..' are rejected by an
+    explicit exclusion, since the pattern alone matches both. The trailing-newline value is there
+    for a different reason from the rest: the pattern's '$' also matches just before a final
+    newline, so match() accepts a coordinate that ends in one and would emit a purl with a line
+    break inside the namespace. Only fullmatch's whole-string requirement refuses it.
+    """
+    not_maven_ids = ('org.example sample-lib', 'org.example\tlib', '', '.', '..',
+                     'org/example', 'org.example:lib', 'org.example~lib',
+                     '${project.version}', 'org.exämple', 'probe.group\n')
+    for value in not_maven_ids:
+        assert not sbom_cyclonedx_generator.is_maven_coordinate(value), value
+    whitespace_bearing = [v for v in not_maven_ids if any(c.isspace() for c in v)]
+    assert len(whitespace_bearing) == 3
+
+
+def test_maven_coordinates_fixture_yields_five_distinct_components():
+    """Anti-vacuity for the fixture, and the collapse guard for version omission.
+
+    A lookup above raises when an element vanishes, but an element added, or two bom-refs
+    collapsed into one when a version is omitted, would otherwise go unnoticed.
+    """
+    model, _ = get_model_and_model_api(MAVEN_COORDINATES_MODEL)
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+    assert len(sbom['components']) == 5
+    assert len({component['bom-ref'] for component in sbom['components']}) == 5
+
+
+def test_a_partly_resolved_version_keeps_its_version():
+    """Only a whole build-property expression is dropped, not a version that merely contains one.
+
+    Nothing else can fail if UNRESOLVED_VERSION is widened from fullmatch to a substring search:
+    no fixture carries a partly resolved version, so every other assertion stays green while
+    '1.0-${suffix}' silently loses the resolved part it should have kept.
+    """
+    model = SGraph(SElement(None, ''))
+    elem = model.createOrGetElementFromPath('/Proj/External/Maven/lib')
+    elem.attrs.update({'groupId': 'org.example', 'artifactId': 'lib'})
+    assert sbom_cyclonedx_generator.maven_purl(elem, '1.0-${suffix}') == \
+        'pkg:maven/org.example/lib@1.0-${suffix}'
+    assert sbom_cyclonedx_generator.maven_purl(elem, '${suffix}') == 'pkg:maven/org.example/lib'
+
+
+def test_a_caret_prefixed_version_is_normalised_as_on_every_other_branch():
+    """The maven path keeps the version handling the shared tail gives every other type.
+
+    purl_for strips a leading caret before splicing the version in. The maven path returns
+    early, so it has to apply that itself, and no fixture carries a caret version: dropping the
+    call changes no other assertion in this file.
+    """
+    maven_bucket = SElement(None, 'Maven')
+    elem = SElement(maven_bucket, 'org.example example-lib of version 1.0')
+    elem.attrs.update(groupId='org.example', artifactId='example-lib')
+    purl, properties = sbom_cyclonedx_generator.purl_for(elem, '^1.0')
+    assert purl == 'pkg:maven/org.example/example-lib@1.0'
+    assert properties == []

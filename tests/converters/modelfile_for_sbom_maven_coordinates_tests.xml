@@ -1,0 +1,56 @@
+<model version="2.1">
+  <elements>
+    <e n="ExampleOrg">
+      <e n="repoA">
+        <e n="src">
+          <!-- This .dll reference votes nuget if the coordinate-less Maven element below ever
+               reaches extension inference. It is what lets the residual assertion tell "the
+               Maven branch resolved this honestly" apart from "the fallback branch guessed".
+               Removing it leaves the two outcomes indistinguishable. -->
+          <e i="10" n="Consumer.dll" t="file">
+            <r r="22" t="ref" />
+          </e>
+        </e>
+      </e>
+      <e n="External">
+        <!-- The Maven bucket sits under a JVM layer here, as analyzer output does. The branch
+             matches the package element's parent, so the extra layer must make no difference.
+             Flattening this to External/Maven would retire the only tracked evidence of that. -->
+        <e n="JVM">
+          <e n="Maven">
+            <!-- Uppercase in BOTH coordinates. The maven type is case-sensitive in namespace and
+                 name, so a .lower() applied to either would corrupt the purl. Lowercasing this
+                 element would make the case guard vacuous. -->
+            <e i="20" n="Org.Example.Mixed Mixed-Lib of version 4.0"
+              artifactId="Mixed-Lib" groupId="Org.Example.Mixed"
+              repotype="Maven" version="4.0" />
+            <!-- groupId without artifactId. This is the only element that separates requiring both
+                 attributes from requiring either one: with both absent the two rules behave
+                 identically. Supplying the missing artifactId would make that guard vacuous. The
+                 name is deliberately single-token so the residual purl carries no space of its own. -->
+            <e i="21" n="partial-lib of version 1.0"
+              groupId="org.example.partial"
+              repotype="Maven" version="1.0" />
+            <!-- No coordinates at all. Adding either attribute would make the residual guard
+                 vacuous. -->
+            <e i="22" n="coordinateless-lib of version 2.0"
+              repotype="Maven" version="2.0" />
+            <!-- The colon is legal in a purl component and can never be a Maven id, so this
+                 element fails a Maven-charset guard while passing a purl-charset one. Replacing
+                 the colon with a space would let a whitespace-only guard through and lose the
+                 distinction this element exists to draw. -->
+            <e i="23" n="colon-lib of version 3.0"
+              artifactId="colon-lib" groupId="org.example:evil"
+              repotype="Maven" version="3.0" />
+            <!-- An unresolved build-property expression instead of a version. The purl omits the
+                 version rather than carrying the expression; the component's version field keeps
+                 it raw. Resolving this to a real version would make that guard vacuous. -->
+            <e i="24" n="org.example.unresolved unresolved-lib of version ${project.version}"
+              artifactId="unresolved-lib" groupId="org.example.unresolved"
+              repotype="Maven" version="${project.version}" />
+          </e>
+        </e>
+      </e>
+    </e>
+  </elements>
+</model>
