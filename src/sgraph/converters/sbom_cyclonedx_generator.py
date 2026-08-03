@@ -82,7 +82,7 @@ FALLBACK_PURL_TYPE = 'generic'
 # Same rule, opposite outcomes, because the type definitions differ. pypi and gem also prohibit a
 # namespace, so whl/egg/gem are safe to infer.
 #
-# This fixes the purl TYPE only. Package names are still emitted unencoded throughout this
+# This table fixes the purl TYPE only. Package names are still emitted unencoded throughout this
 # module, so a spec-valid type does not by itself make a purl spec-conforming.
 PURL_TYPE_BY_REFERENCING_EXTENSION = {
     'dll': 'nuget',

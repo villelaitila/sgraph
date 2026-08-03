@@ -116,8 +116,8 @@ def test_multi_sbom_internal_dependencies():
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
 
 # The purl spec requires a type to start with a letter and to hold only [a-z0-9.-] in its
-# canonical form. Only the type is anchored on purpose: name encoding is a separate, pre-existing
-# concern (existing fixtures legitimately produce maven names that contain a space).
+# canonical form. Only the type is anchored here: this pattern predates maven coordinates and
+# still says nothing about namespace, name or version, which other assertions cover.
 PURL_TYPE_PATTERN = re.compile(r'^pkg:[a-z][a-z0-9.-]*/')
 
 
