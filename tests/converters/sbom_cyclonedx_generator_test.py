@@ -259,10 +259,10 @@ def test_types_read_from_attributes_or_ancestors_carry_no_provenance():
     assert components['ExampleOrg.Common']['purl'] == 'pkg:nuget/ExampleOrg.Common@1.4.2'
     assert purl_type_resolution(components['ExampleOrg.Common']) is None
     maven_component = components['org.example.sample sample-lib']
-    # Characterization of known-nonconforming output: the name keeps its literal space (names
-    # are emitted unencoded — see the type-only caveat in the generator). A name-encoding fix
-    # should update this expected string, not relax the assertion.
-    assert maven_component['purl'] == 'pkg:maven/org.example.sample sample-lib@2.4.1'
+    # This component is still looked up by a name that carries the space; only the purl stopped
+    # carrying it. Maven ids cannot contain a space, so encoding it as %20 here would have been
+    # spec-valid and still matched nothing.
+    assert maven_component['purl'] == 'pkg:maven/org.example.sample/sample-lib@2.4.1'
     assert purl_type_resolution(maven_component) is None
 
 

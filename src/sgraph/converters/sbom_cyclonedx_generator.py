@@ -95,6 +95,30 @@ PURL_TYPE_BY_REFERENCING_EXTENSION = {
 
 PURL_TYPE_SOURCE_PROPERTY = 'purlTypeResolution'
 
+# Maven's model validator restricts groupId and artifactId to [A-Za-z0-9._-] at ERROR severity
+# for every POM, and that set is a strict subset of the characters purl leaves unencoded. So a
+# coordinate that passes this guard is spliced into the purl verbatim and needs no encoding
+# step, which is what makes deferring encoding coherent rather than a shortcut.
+MAVEN_COORDINATE = re.compile(r'^[A-Za-z0-9._-]+$')
+
+# A Maven version the analyzer captured before the build resolved it. Matched with fullmatch,
+# deliberately: a version that merely contains an expression, such as '1.0-${suffix}', is partly
+# known, and dropping the known part would change which components exist under a rule nobody has
+# measured. Widening this to a substring search is the tempting simplification to refuse.
+UNRESOLVED_VERSION = re.compile(r'\$\{.+\}')
+
+
+def is_maven_coordinate(value):
+    """Whether a value can be a Maven groupId or artifactId, and so a purl component.
+
+    The dot check is not redundant with the pattern: '.' and '..' match it and are not ids.
+    Maven's local repository layout uses coordinate ids verbatim as directory names, so
+    accepting them would splice a path-traversal segment into the position where a namespace
+    belongs. No real coordinate is a dot, so removing this clause leaves every test drawn from
+    coordinate data green.
+    """
+    return bool(MAVEN_COORDINATE.match(value)) and value not in {'.', '..'}
+
 
 def infer_pkgtype_from_referencing_files(elem):
     """Infer a purl type from the extensions of the files referencing this element.
@@ -126,6 +150,31 @@ def infer_pkgtype_from_referencing_files(elem):
     return winner, sorted(extensions_by_pkgtype[winner])
 
 
+def maven_purl(elem, version):
+    """Build the maven purl from an element's coordinates, or None when it has none usable.
+
+    The maven type definition makes the namespace required and names groupId as its native
+    name, so a single-segment pkg:maven/<artifact> is not merely unencoded, it is unmatchable:
+    Maven Central identity is groupId:artifactId. Both coordinates are read straight off the
+    element, so this is a projection of what the model already holds, not an inference about it.
+
+    None covers absent, partial and charset-rejected coordinates alike: they take the same
+    residual, so the caller does not need to tell them apart.
+
+    An unresolved version yields a versionless purl rather than one carrying the expression. A
+    purl version must be percent-encoded, so the expression would be either non-canonical raw or
+    canonical-but-unmatchable encoded; omitting it yields a purl that is canonical and still
+    matches at package level.
+    """
+    group_id = elem.attrs.get('groupId', '')
+    artifact_id = elem.attrs.get('artifactId', '')
+    if not (is_maven_coordinate(group_id) and is_maven_coordinate(artifact_id)):
+        return None
+    if UNRESOLVED_VERSION.fullmatch(version):
+        return f'pkg:maven/{group_id}/{artifact_id}'
+    return f'pkg:maven/{group_id}/{artifact_id}@{version}'
+
+
 def purl_for(elem, v):
     """Build the purl of an element and report how its package type was resolved.
 
@@ -148,8 +197,16 @@ def purl_for(elem, v):
         pkgtype = 'pypi'  # ??
     elif elem.parent.name == 'Go':
         pkgtype = 'golang'
+    # Coordinates read from attributes are not a guess, so no resolution property is appended.
     elif elem.parent.name == 'Maven':
-        pkgtype = 'maven'
+        maven = maven_purl(elem, v.lstrip('^'))
+        if maven is not None:
+            return maven, properties
+        pkgtype = FALLBACK_PURL_TYPE
+        properties.append({
+            'name': PURL_TYPE_SOURCE_PROPERTY,
+            'value': 'maven coordinates unavailable'
+        })
     elif incoming_deps(elem, ['csproj', 'vbproj'],
                        ['assembly_ref']) or parents_parent_or_parent_name_equals(
                            elem, 'Assemblies'):
