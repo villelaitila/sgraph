@@ -434,19 +434,22 @@ def test_maven_coordinate_guard_accepts_real_coordinates():
 def test_maven_coordinate_guard_does_more_than_reject_whitespace():
     """Control against simplifying the guard to a space check.
 
-    Only two of the values below contain whitespace at all, asserted rather than claimed, so a
+    Only three of the values below contain whitespace at all, asserted rather than claimed, so a
     guard reduced to a whitespace test would accept the other eight. Two of those eight,
     'org.example:lib' and 'org.example~lib', purl would leave unencoded: they are what
     distinguishes a Maven-charset guard from a purl-charset one. '.' and '..' are rejected by an
-    explicit exclusion, since the pattern alone matches both.
+    explicit exclusion, since the pattern alone matches both. The trailing-newline value is why
+    the pattern is applied with fullmatch: '$' also matches before a final newline, so under
+    match() that one value would be accepted and emit a purl with a line break inside the
+    namespace.
     """
     not_maven_ids = ('org.example sample-lib', 'org.example\tlib', '', '.', '..',
                      'org/example', 'org.example:lib', 'org.example~lib',
-                     '${project.version}', 'org.exämple')
+                     '${project.version}', 'org.exämple', 'probe.group\n')
     for value in not_maven_ids:
         assert not sbom_cyclonedx_generator.is_maven_coordinate(value), value
     whitespace_bearing = [v for v in not_maven_ids if any(c.isspace() for c in v)]
-    assert len(whitespace_bearing) == 2
+    assert len(whitespace_bearing) == 3
 
 
 def test_maven_coordinates_fixture_yields_five_distinct_components():

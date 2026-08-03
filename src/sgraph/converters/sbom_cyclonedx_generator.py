@@ -117,7 +117,7 @@ def is_maven_coordinate(value):
     belongs. No real coordinate is a dot, so removing this clause leaves every test drawn from
     coordinate data green.
     """
-    return bool(MAVEN_COORDINATE.match(value)) and value not in {'.', '..'}
+    return bool(MAVEN_COORDINATE.fullmatch(value)) and value not in {'.', '..'}
 
 
 def infer_pkgtype_from_referencing_files(elem):
