@@ -438,10 +438,10 @@ def test_maven_coordinate_guard_does_more_than_reject_whitespace():
     guard reduced to a whitespace test would accept the other eight. Two of those eight,
     'org.example:lib' and 'org.example~lib', purl would leave unencoded: they are what
     distinguishes a Maven-charset guard from a purl-charset one. '.' and '..' are rejected by an
-    explicit exclusion, since the pattern alone matches both. The trailing-newline value is why
-    the pattern is applied with fullmatch: '$' also matches before a final newline, so under
-    match() that one value would be accepted and emit a purl with a line break inside the
-    namespace.
+    explicit exclusion, since the pattern alone matches both. The trailing-newline value is there
+    for a different reason from the rest: the pattern's '$' also matches just before a final
+    newline, so match() accepts a coordinate that ends in one and would emit a purl with a line
+    break inside the namespace. Only fullmatch's whole-string requirement refuses it.
     """
     not_maven_ids = ('org.example sample-lib', 'org.example\tlib', '', '.', '..',
                      'org/example', 'org.example:lib', 'org.example~lib',
