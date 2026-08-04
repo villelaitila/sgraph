@@ -873,7 +873,91 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
     return components
 
 
-def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3) -> list[dict]:
+def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_elem_by_path,
+                                            elem_serials, elem_bom_refs, orig_external_root,
+                                            other_externals_by_name):
+    """Inline everything reachable from root_path into one self-contained BOM.
+
+    Dependency-Track resolves dependency refs only within a single uploaded BOM: the BOM-Link
+    URNs of the default mode are never followed into other projects, so the exposure chain
+    root -> internal element -> vulnerable 3rd-party component stays invisible there. Inlining
+    the reachable internal elements as components, together with the 3rd-party components of
+    the whole chain, makes the chain resolvable inside one project. Each inlined internal
+    component still points to its own standalone SBOM via an externalReference of type 'bom'.
+
+    :return: (components, dependencies) for the SBOM of the element at root_path
+    """
+    # Breadth-first walk over the generalized cross-element graph
+    order = [root_path]
+    direct_internal = {}
+    queue = [root_path]
+    while queue:
+        path = queue.pop(0)
+        targets = []
+        gen_elem = gen_elem_by_path.get(path)
+        if gen_elem is not None:
+            for assoc in gen_elem.outgoing:
+                target_path = assoc.toElement.getPath()
+                if target_path in elem_bom_refs and target_path != path \
+                        and target_path not in targets:
+                    targets.append(target_path)
+        direct_internal[path] = targets
+        for target_path in targets:
+            if target_path not in order:
+                order.append(target_path)
+                queue.append(target_path)
+
+    # 3rd-party components of every element in the chain, deduplicated on the same case-folded
+    # key the per-subtree walk uses — a case-variant spelling arriving from another element of
+    # the chain is the same package, not a second one. dependsOn refs are canonicalized to the
+    # surviving spelling so no entry references a folded-away component. Components pulled in
+    # through an internal element are annotated with the element that routed them here.
+    components = []
+    surviving_ref_by_key = {}
+    external_refs_of = {}
+    for path in order:
+        elem = orig_elem_by_path[path]
+        ext_components = _collect_3rdparty_for_subtree(elem, orig_external_root,
+                                                       other_externals_by_name)
+        refs = []
+        for component in ext_components:
+            key = dedup_key(component['bom-ref'])
+            if key not in surviving_ref_by_key:
+                surviving_ref_by_key[key] = component['bom-ref']
+                if path != root_path:
+                    component.setdefault('properties', []).append({
+                        'name': 'softagram:via',
+                        'value': elem.name
+                    })
+                components.append(component)
+            refs.append(surviving_ref_by_key[key])
+        external_refs_of[path] = refs
+
+    # Reachable internal elements become components of this BOM
+    for path in order[1:]:
+        serial_uuid = elem_serials[path].replace('urn:uuid:', '')
+        components.append({
+            'bom-ref': elem_bom_refs[path],
+            'type': 'library',
+            'name': orig_elem_by_path[path].name,
+            'version': '',
+            'purl': '',
+            'properties': [{'name': 'softagram:internal', 'value': 'true'}],
+            'externalReferences': [{'url': f'urn:cdx:{serial_uuid}/1', 'type': 'bom'}],
+        })
+
+    # Multi-entry dependency graph: every ref resolves within this BOM
+    dependencies = []
+    for path in order:
+        depends_on = list(external_refs_of[path])
+        depends_on += [elem_bom_refs[target] for target in direct_internal[path]]
+        dependencies.append({'ref': elem_bom_refs[path], 'dependsOn': depends_on})
+
+    return components, dependencies
+
+
+def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
+                               transitive: bool = False) -> list[dict]:
     """Generate one CycloneDX 1.7 SBOM per element at the given level.
 
     Uses the ORIGINAL model for 3rd-party component collection (preserves version info),
@@ -881,6 +965,9 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3) -> list[dict]:
 
     :param sgraph: The loaded SGraph model
     :param level: Tree depth at which to split into separate SBOMs
+    :param transitive: Inline the transitive closure of internal dependencies into each SBOM
+        so consumers that cannot follow BOM-Links across uploads (e.g. Dependency-Track) see
+        the full exposure chain within one BOM
     :return: List of CycloneDX SBOM dicts
     """
     from sgraph.algorithms.generalizer import generalize_model
@@ -937,10 +1024,12 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3) -> list[dict]:
     # Build path -> serial/ref mappings for all content elements (using original paths)
     elem_serials = {}
     elem_bom_refs = {}
+    orig_elem_by_path = {}
     for elem in orig_content_elements:
         path = elem.getPath()
         elem_serials[path] = deterministic_serial(path)
         elem_bom_refs[path] = slugify_bom_ref(elem.name)
+        orig_elem_by_path[path] = elem
 
     # Build generalized element lookup by path for cross-repo deps
     gen_elem_by_path = {elem.getPath(): elem for elem in gen_content_elements}
@@ -962,31 +1051,37 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3) -> list[dict]:
             'externalReferences': []
         }
 
-        # 3rd party components from original model (preserves version info)
-        sbom.components = _collect_3rdparty_for_subtree(
-            orig_elem, orig_external_root, other_externals_by_name
-        )
+        if transitive:
+            sbom.components, dependencies = _transitive_components_and_dependencies(
+                path, gen_elem_by_path, orig_elem_by_path, elem_serials, elem_bom_refs,
+                orig_external_root, other_externals_by_name
+            )
+        else:
+            # 3rd party components from original model (preserves version info)
+            sbom.components = _collect_3rdparty_for_subtree(
+                orig_elem, orig_external_root, other_externals_by_name
+            )
 
-        # Dependencies section
-        depends_on = []
+            # Dependencies section
+            depends_on = []
 
-        # 3rd party purl refs
-        for component in sbom.components:
-            depends_on.append(component['bom-ref'])
+            # 3rd party purl refs
+            for component in sbom.components:
+                depends_on.append(component['bom-ref'])
 
-        # Internal cross-repo dependencies from generalized model (BOM-Link URNs)
-        gen_elem = gen_elem_by_path.get(path)
-        if gen_elem is not None:
-            for assoc in gen_elem.outgoing:
-                target_path = assoc.toElement.getPath()
-                if target_path in elem_serials and target_path != path:
-                    target_serial_uuid = elem_serials[target_path].replace('urn:uuid:', '')
-                    target_ref = elem_bom_refs[target_path]
-                    bom_link = f"urn:cdx:{target_serial_uuid}/1#{target_ref}"
-                    if bom_link not in depends_on:
-                        depends_on.append(bom_link)
+            # Internal cross-repo dependencies from generalized model (BOM-Link URNs)
+            gen_elem = gen_elem_by_path.get(path)
+            if gen_elem is not None:
+                for assoc in gen_elem.outgoing:
+                    target_path = assoc.toElement.getPath()
+                    if target_path in elem_serials and target_path != path:
+                        target_serial_uuid = elem_serials[target_path].replace('urn:uuid:', '')
+                        target_ref = elem_bom_refs[target_path]
+                        bom_link = f"urn:cdx:{target_serial_uuid}/1#{target_ref}"
+                        if bom_link not in depends_on:
+                            depends_on.append(bom_link)
 
-        dependencies = [{'ref': ref, 'dependsOn': depends_on}]
+            dependencies = [{'ref': ref, 'dependsOn': depends_on}]
 
         # Serialize
         data = sbom.as_cyclonedx_json()
@@ -1006,12 +1101,20 @@ if __name__ == '__main__':
     parser.add_argument('--level', type=int, default=None,
                         help='Generate one SBOM per element at this tree depth. '
                              'Without this flag, generates a single SBOM (legacy behavior).')
+    parser.add_argument('--transitive', action='store_true',
+                        help='Inline the transitive closure of internal dependencies into '
+                             'each SBOM so the full exposure chain resolves within one BOM '
+                             '(for consumers like Dependency-Track that do not follow '
+                             'BOM-Links across uploads). Requires --level.')
     args = parser.parse_args()
+
+    if args.transitive and args.level is None:
+        parser.error('--transitive requires --level')
 
     g = SGraph.parse_xml_or_zipped_xml(args.model)
 
     if args.level is not None:
-        result = generate_multi_from_sgraph(g, level=args.level)
+        result = generate_multi_from_sgraph(g, level=args.level, transitive=args.transitive)
     else:
         result = generate_from_sgraph(g)
 

@@ -1,6 +1,6 @@
 import re
 
-from sgraph import SElement, SGraph
+from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sbom_cyclonedx_generator import (
     deterministic_serial, slugify_bom_ref, generate_multi_from_sgraph,
@@ -109,6 +109,206 @@ def test_multi_sbom_internal_dependencies():
     repo_b_sbom = next(s for s in result if s['metadata']['component']['name'] == 'repoB')
     repo_b_serial = repo_b_sbom['serialNumber'].replace('urn:uuid:', '')
     assert any(repo_b_serial in link for link in bom_link_deps)
+
+
+# --- Transitive multi-SBOM tests ---
+#
+# Dependency-Track resolves dependency graphs strictly within one uploaded BOM: BOM-Link URNs
+# in dependsOn are never followed into other projects, so the exposure chain
+# repoA -> repoB -> vulnerable-component is invisible when each repo uploads its own SBOM.
+# Transitive mode inlines reachable internal elements and their 3rd-party components into each
+# SBOM so the whole chain resolves inside a single BOM.
+
+MULTI_MODEL = 'converters/modelfile_for_sbom_multi_tests.xml'
+
+
+# find_property is defined with the emission helpers further down; module-level resolution at
+# call time lets the earlier tests here use it.
+
+
+def sbom_of(result, name):
+    return next(s for s in result if s['metadata']['component']['name'] == name)
+
+
+def test_transitive_mode_includes_internal_elements_as_components():
+    """repoA's SBOM carries repoB inline as an internal library component."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    internal = [c for c in repo_a_sbom['components']
+                if find_property(c, 'softagram:internal') == 'true']
+    assert [c['name'] for c in internal] == ['repoB']
+    assert internal[0]['type'] == 'library'
+    assert internal[0]['bom-ref'] == slugify_bom_ref('repoB')
+
+
+def test_transitive_internal_component_links_to_its_standalone_sbom():
+    """The inlined internal component carries a BOM-Link to repoB's own SBOM serial."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    repo_b_component = next(c for c in repo_a_sbom['components'] if c['name'] == 'repoB')
+    bom_refs = [r for r in repo_b_component['externalReferences'] if r['type'] == 'bom']
+
+    repo_b_serial = sbom_of(result, 'repoB')['serialNumber'].replace('urn:uuid:', '')
+    assert [r['url'] for r in bom_refs] == [f'urn:cdx:{repo_b_serial}/1']
+
+
+def test_transitive_mode_pulls_indirect_externals_with_provenance():
+    """repoB's 3rd-party dependency lands in repoA's SBOM, annotated with its route."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    components_by_name = {c['name']: c for c in repo_a_sbom['components']}
+
+    commons_lang = next(c for name, c in components_by_name.items() if 'commons-lang3' in name)
+    assert find_property(commons_lang, 'softagram:via') == 'repoB'
+
+    # repoA's own direct dependency is not annotated as indirect
+    assert find_property(components_by_name['Newtonsoft.Json'], 'softagram:via') is None
+
+
+def test_transitive_mode_emits_the_exposure_chain_in_dependencies():
+    """dependencies expresses repoA -> repoB -> commons-lang3 as a multi-entry graph."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    entries = {d['ref']: d['dependsOn'] for d in repo_a_sbom['dependencies']}
+
+    root_ref = repo_a_sbom['metadata']['component']['bom-ref']
+    repo_b_ref = slugify_bom_ref('repoB')
+
+    assert repo_b_ref in entries[root_ref]
+    assert any('Newtonsoft.Json' in ref for ref in entries[root_ref])
+    assert any('commons-lang3' in ref for ref in entries[repo_b_ref])
+
+    # No BOM-Link URNs in dependsOn: Dependency-Track drops them as dangling refs
+    for depends_on in entries.values():
+        assert not any(ref.startswith('urn:cdx:') for ref in depends_on)
+
+
+def test_transitive_mode_dependson_refs_all_resolve_within_the_bom():
+    """Every ref and dependsOn entry points at a component of the same BOM (DT-import safety)."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    for sbom in result:
+        known_refs = {c['bom-ref'] for c in sbom['components']}
+        known_refs.add(sbom['metadata']['component']['bom-ref'])
+        for entry in sbom['dependencies']:
+            assert entry['ref'] in known_refs
+            for ref in entry['dependsOn']:
+                assert ref in known_refs
+
+
+def test_default_mode_is_unchanged_by_the_transitive_feature():
+    """Without transitive=True there are no inlined internal components and BOM-Links remain."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    assert all(find_property(c, 'softagram:internal') is None
+               for c in repo_a_sbom['components'])
+    assert len(repo_a_sbom['dependencies']) == 1
+    assert any(ref.startswith('urn:cdx:')
+               for ref in repo_a_sbom['dependencies'][0]['dependsOn'])
+
+
+def test_transitive_mode_terminates_on_dependency_cycles():
+    """Mutually dependent repos inline each other once and both externals appear in both SBOMs."""
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.cs')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.cs')
+    ext_a = model.createOrGetElementFromPath('/Org/External/NuGet/LibA')
+    ext_a.attrs['version'] = '1.0.0'
+    ext_b = model.createOrGetElementFromPath('/Org/External/NuGet/LibB')
+    ext_b.attrs['version'] = '2.0.0'
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(b_file, a_file, 'use').initElems()
+    SElementAssociation(a_file, ext_a, 'use').initElems()
+    SElementAssociation(b_file, ext_b, 'use').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive=True)
+    assert len(result) == 2
+
+    for name, other in (('repoA', 'repoB'), ('repoB', 'repoA')):
+        sbom = sbom_of(result, name)
+        component_names = [c['name'] for c in sbom['components']]
+        assert component_names.count(other) == 1
+        assert 'LibA' in component_names
+        assert 'LibB' in component_names
+
+
+def test_transitive_dedup_folds_case_like_the_per_subtree_walk():
+    """A case-variant NuGet id met through an internal element is the same package, not a second.
+
+    The per-subtree collector folds nuget/pypi keys (G5); the cross-subtree merge of transitive
+    mode must apply the same key, or the duplicate G5 removed comes back whenever the two
+    spellings arrive from different repos.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.cs')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.cs')
+    upper = model.createOrGetElementFromPath('/Org/External/Assemblies/NLog')
+    upper.attrs['version'] = '5.0.0'
+    lower = model.createOrGetElementFromPath('/Org/External/Assemblies/nlog')
+    lower.attrs['version'] = '5.0.0'
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(a_file, upper, 'use').initElems()
+    SElementAssociation(b_file, lower, 'use').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive=True)
+    repo_a_sbom = sbom_of(result, 'repoA')
+
+    nlog_components = [c for c in repo_a_sbom['components'] if c['name'].lower() == 'nlog']
+    assert len(nlog_components) == 1
+    # Document order: repoA's own spelling arrives first and survives
+    assert nlog_components[0]['name'] == 'NLog'
+
+    # repoB's dependency entry must reference the SURVIVING spelling, not the dropped one —
+    # otherwise the fold reintroduces a dangling ref inside the BOM
+    entries = {d['ref']: d['dependsOn'] for d in repo_a_sbom['dependencies']}
+    assert entries[slugify_bom_ref('repoB')] == ['pkg:nuget/NLog@5.0.0']
+
+
+def test_cli_supports_the_transitive_flag(tmp_path):
+    """python -m ...sbom_cyclonedx_generator model out.json --level 3 --transitive works."""
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    out_path = tmp_path / 'sboms.json'
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(out_path), '--level', '3', '--transitive'],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    result = json.loads(out_path.read_text())
+    repo_a_sbom = sbom_of(result, 'repoA')
+    assert any(find_property(c, 'softagram:internal') == 'true'
+               for c in repo_a_sbom['components'])
+
+
+def test_cli_rejects_transitive_without_level(tmp_path):
+    """--transitive is only meaningful with --level; without it the CLI refuses."""
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(tmp_path / 'out.json'), '--transitive'],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert '--transitive requires --level' in proc.stderr
 
 
 # --- purl type inference tests ---
