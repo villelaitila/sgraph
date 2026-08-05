@@ -67,7 +67,7 @@ def extract_version(elem):
         version = elem.name.split(' of version ')[-1].strip()
     elif ' of tag ' in elem.name:
         version = elem.name.split(' of tag ')[-1].strip()
-    if 'parent_version' in elem.attrs:
+    elif 'parent_version' in elem.attrs:
         version = elem.attrs['parent_version']
     if version is None:
         return None
@@ -453,6 +453,7 @@ def purl_for(elem, v):
         # Disclosed rather than dropped: the raw value stays in the component's version field,
         # and this property records why the purl carries no version.
         properties.append({'name': VERSION_SOURCE_PROPERTY, 'value': v})
+        return f'pkg:{pkgtype}/{pkgid}', properties
     # The versionless-inclusion rule made an empty version reachable here, not only in
     # maven_purl: charset-rejected coordinates drop a versionless element to this splice.
     if not v:
