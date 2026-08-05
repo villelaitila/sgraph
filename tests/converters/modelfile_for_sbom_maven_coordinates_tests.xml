@@ -11,6 +11,19 @@
             <r r="22" t="ref" />
           </e>
         </e>
+        <!-- These references are the whole difference between managed-lib and husk-lib: the
+             inclusion rule for versionless elements is incoming references, and only one of the
+             pair has any. Removing either reference or pointing one at husk-lib collapses the
+             pair into indistinguishable elements and the rule's control is gone. legacy-parent
+             is referenced too, deliberately: its exclusion must rest on its missing coordinates
+             alone, or the test would pass for the wrong reason on a missing reference. -->
+        <e i="11" n="pom.xml" t="file">
+          <r r="30" t="mvn" />
+          <r r="32" t="mvn_parent" />
+          <r r="33" t="mvn_parent" />
+          <r r="34" t="mvn_parent" />
+          <r r="35" t="mvn" />
+        </e>
       </e>
       <e n="External">
         <!-- The Maven bucket sits under a JVM layer here, as analyzer output does. The branch
@@ -48,6 +61,48 @@
             <e i="24" n="org.example.unresolved unresolved-lib of version ${project.version}"
               artifactId="unresolved-lib" groupId="org.example.unresolved"
               repotype="Maven" version="${project.version}" />
+            <!-- No version anywhere: it is managed by a BOM or parent the analyzer never parses.
+                 The element is referenced from pom.xml, which is what earns it a component.
+                 Giving it a version attribute would turn the versionless-inclusion test into a
+                 restatement of the ordinary versioned case. -->
+            <e i="30" n="org.example.managed managed-lib"
+              artifactId="managed-lib" groupId="org.example.managed"
+              repotype="Maven" />
+            <!-- The unreferenced control for managed-lib: identical shape, no incoming reference.
+                 Version-management redirection leaves elements like this behind after their
+                 references were re-pointed at versioned ones. If this ever appears as a
+                 component, the inclusion rule has decayed into mere coordinate presence. -->
+            <e i="31" n="org.example.husk husk-lib"
+              artifactId="husk-lib" groupId="org.example.husk"
+              repotype="Maven" />
+            <!-- An external parent pom: its exact version is known but arrives under
+                 parent_version, because that is the attribute a <parent> block produces. Renaming
+                 this to version would make the parent_version extraction guard vacuous. -->
+            <e i="32" n="org.example.parentpom parent-pom"
+              artifactId="parent-pom" groupId="org.example.parentpom"
+              parent_version="7.1" repotype="Maven" />
+            <!-- The old-model shape of a parent: every model persisted before the analyzer
+                 started writing coordinates onto parents carries parent_version alone. Emitting
+                 it would splice the space-bearing element name into a generic purl, the exact
+                 class the maven-purl work eliminated. Adding coordinates here would turn this
+                 back into parent-pom and retire the only stored-model regression guard. -->
+            <e i="33" n="org.example.legacyparent legacy-parent"
+              parent_version="5.5" repotype="Maven" />
+            <!-- Two poms naming the same parent at different versions land on one element, and
+                 the attribute transfer joins the values with a semicolon. A purl carrying the
+                 joined value would assert a version that exists nowhere; the raw value must stay
+                 disclosed in the component's version field only. -->
+            <e i="34" n="org.example.multiparent multi-parent"
+              artifactId="multi-parent" groupId="org.example.multiparent"
+              parent_version="4.1.0;3.2.0" repotype="Maven" />
+            <!-- Versionless AND charset-rejected coordinates: a ${} groupId whose property lives
+                 in an external parent. With a version such an element takes the generic residual;
+                 with neither version nor usable identity there is nothing spec-clean to emit, and
+                 the fallback would splice the space-bearing name into the purl. Resolving the
+                 groupId here would collapse this into managed-lib and retire the guard. -->
+            <e i="35" n="org.example.propgroup prop-group-lib"
+              artifactId="prop-group-lib" groupId="${project.groupId}"
+              repotype="Maven" />
           </e>
         </e>
       </e>

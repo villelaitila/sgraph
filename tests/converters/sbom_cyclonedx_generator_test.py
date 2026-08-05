@@ -452,16 +452,142 @@ def test_maven_coordinate_guard_does_more_than_reject_whitespace():
     assert len(whitespace_bearing) == 3
 
 
-def test_maven_coordinates_fixture_yields_five_distinct_components():
+def test_maven_coordinates_fixture_yields_eight_distinct_components():
     """Anti-vacuity for the fixture, and the collapse guard for version omission.
 
     A lookup above raises when an element vanishes, but an element added, or two bom-refs
-    collapsed into one when a version is omitted, would otherwise go unnoticed.
+    collapsed into one when a version is omitted, would otherwise go unnoticed. Eight, not
+    ten: husk-lib and legacy-parent exist in the fixture and must not be counted here.
     """
     model, _ = get_model_and_model_api(MAVEN_COORDINATES_MODEL)
     sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
-    assert len(sbom['components']) == 5
-    assert len({component['bom-ref'] for component in sbom['components']}) == 5
+    assert len(sbom['components']) == 8
+    assert len({component['bom-ref'] for component in sbom['components']}) == 8
+
+
+# --- version-managed dependency tests ---
+
+
+def test_a_referenced_versionless_dependency_is_still_a_component():
+    """A dependency version-managed by an imported BOM has no version anywhere in the model.
+
+    The version is real but lives inside an artifact the analyzer never parses, so requiring a
+    version for inclusion drops exactly the dependencies modern Maven declares: the more a
+    project centralizes versions in parents and BOMs, the emptier its SBOM. A versionless maven
+    purl is canonical and still matches at package level — the same trade the
+    unresolved-expression case above already accepted.
+    """
+    component = get_maven_coordinate_components()['org.example.managed managed-lib']
+    assert component['purl'] == 'pkg:maven/org.example.managed/managed-lib'
+    assert component['version'] == ''
+    assert purl_type_resolution(component) is None
+
+
+def test_an_unreferenced_versionless_element_is_not_swept_in():
+    """The inclusion rule for versionless elements is incoming references, not existence.
+
+    Version-management redirection re-points references at versioned elements and leaves the
+    versionless originals behind with none. husk-lib is the control for managed-lib: identical
+    shape, no incoming reference. Without it the rule could decay into plain coordinate
+    presence and every other assertion would stay green.
+    """
+    assert 'org.example.husk husk-lib' not in get_maven_coordinate_components()
+
+
+def test_parent_version_supplies_the_version_of_an_external_parent_pom():
+    """A parent pom reference records its exact version under parent_version, not version.
+
+    The analyzer read that version out of the <parent> block it parsed, so dropping the
+    component, or emitting it versionless, discards information the model already holds.
+    """
+    component = get_maven_coordinate_components()['org.example.parentpom parent-pom']
+    assert component['purl'] == 'pkg:maven/org.example.parentpom/parent-pom@7.1'
+    assert component['version'] == '7.1'
+
+
+def test_an_explicit_version_outranks_parent_version():
+    """An element that is both a parent and an ordinary dependency keeps its own version.
+
+    No fixture element carries both attributes, deliberately: this ordering is a property of
+    extract_version alone, and a fixture pinning it would couple two orthogonal guards.
+    """
+    elem = SElement(None, 'org.example both')
+    elem.attrs.update(version='1.0', parent_version='2.0')
+    assert sbom_cyclonedx_generator.extract_version(elem) == '1.0'
+
+
+def test_a_legacy_parent_without_coordinates_is_not_emitted():
+    """Models persisted before the analyzer wrote coordinates onto parents must stay excluded.
+
+    SBOMs are generated on demand from stored models with a multi-month lifetime, so the
+    generator meets old shapes long after the analyzer moved on. A parent_version-only element
+    has no coordinates to build a maven purl from; emitting it would splice the space-bearing
+    element name into a generic purl — the exact class the maven-purl work eliminated. The
+    fixture element is referenced, deliberately: exclusion must rest on the missing coordinates,
+    not on a missing reference.
+    """
+    assert 'org.example.legacyparent legacy-parent' not in get_maven_coordinate_components()
+
+
+def test_an_ambiguous_parent_version_stays_out_of_the_purl():
+    """Two poms naming one parent at different versions collide on one versionless element.
+
+    The attribute transfer joins their versions with a semicolon. A purl carrying the joined
+    value asserts a version that exists nowhere and matches nothing; omitting it keeps the purl
+    canonical and package-level matchable, while the raw value stays disclosed in the version
+    field — the same split the unresolved-expression case established.
+    """
+    component = get_maven_coordinate_components()['org.example.multiparent multi-parent']
+    assert component['purl'] == 'pkg:maven/org.example.multiparent/multi-parent'
+    assert component['version'] == '4.1.0;3.2.0'
+
+
+def test_versionless_inclusion_requires_usable_coordinates():
+    """Charset-rejected coordinates plus no version leave nothing spec-clean to emit.
+
+    A ${} groupId whose property lives in an external parent fails the coordinate guard, so no
+    maven purl can be built; versionless, the element predates this feature in no BOM at all,
+    and admitting it now would splice the space-bearing element name into a generic purl. A
+    versioned element with the same broken coordinates still takes the generic residual as
+    before — this rule is about what the versionless-inclusion branch may admit, not about
+    tightening the residual.
+    """
+    assert 'org.example.propgroup prop-group-lib' not in get_maven_coordinate_components()
+
+
+def test_the_generic_fallback_never_splices_an_empty_version():
+    """The versionless-inclusion rule made an empty version reachable on the fallback path.
+
+    Coordinates that fail the charset guard, such as an unresolved ${project.groupId}, drop the
+    element to the generic branch, and a versionless element then reaches the final splice with
+    an empty version. Appending it would emit a trailing '@' — not a canonical versionless purl
+    but a malformed versioned one, the same shape maven_purl already refuses.
+    """
+    maven_bucket = SElement(None, 'Maven')
+    elem = SElement(maven_bucket, 'caffeine')
+    elem.attrs.update(groupId='${project.groupId}', artifactId='caffeine')
+    purl, properties = sbom_cyclonedx_generator.purl_for(elem, '')
+    assert purl == 'pkg:generic/caffeine'
+    assert properties == [{'name': 'purlTypeResolution', 'value': 'maven coordinates unavailable'}]
+
+
+def test_no_fixture_purl_carries_a_space_a_semicolon_or_a_trailing_at():
+    """The cross-shape invariant the individual guards above defend, stated once directly.
+
+    Findings against stored models all took one of these three shapes; asserting the invariant
+    over every fixture generation catches a regression in any of them even if the targeted
+    test for that shape is later weakened.
+    """
+    for model_file in (MAVEN_COORDINATES_MODEL, BINARY_REFS_MODEL,
+                       'converters/modelfile_for_sbom_tests.xml',
+                       'converters/modelfile_for_sbom_multi_tests.xml'):
+        model, _ = get_model_and_model_api(model_file)
+        sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+        for component in sbom['components']:
+            for ref in (component['purl'], component['bom-ref']):
+                assert ' ' not in ref, ref
+                assert ';' not in ref, ref
+                assert not ref.endswith('@'), ref
 
 
 def test_a_partly_resolved_version_keeps_its_version():
