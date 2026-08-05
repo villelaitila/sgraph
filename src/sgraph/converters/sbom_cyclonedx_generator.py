@@ -956,40 +956,45 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
     return components, dependencies
 
 
-def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
-                               transitive: bool = False) -> list[dict]:
-    """Generate one CycloneDX 1.7 SBOM per element at the given level.
+def _content_elements_at_level(model, level):
+    """Content elements at the given tree depth, and the model's External root.
 
-    Uses the ORIGINAL model for 3rd-party component collection (preserves version info),
-    and a generalized model for inter-repo dependency detection.
-
-    :param sgraph: The loaded SGraph model
-    :param level: Tree depth at which to split into separate SBOMs
-    :param transitive: Inline the transitive closure of internal dependencies into each SBOM
-        so consumers that cannot follow BOM-Links across uploads (e.g. Dependency-Track) see
-        the full exposure chain within one BOM
-    :return: List of CycloneDX SBOM dicts
+    The External subtree is excluded from content wherever it appears on the way down: it holds
+    the 3rd-party components the content elements depend on, not content itself.
     """
-    from sgraph.algorithms.generalizer import generalize_model
+    content_elements = []
+    external_root = None
 
-    # --- Original model: find content elements and External root ---
-    orig_content_elements = []
-    orig_external_root = None
-
-    def collect_orig(elem, current_level):
-        nonlocal orig_external_root
+    def collect(elem, current_level):
+        nonlocal external_root
         if elem.name == 'External' and not elem.typeEquals('dir') and not elem.typeEquals('repo'):
-            orig_external_root = elem
+            external_root = elem
             return
         if current_level == level:
-            orig_content_elements.append(elem)
+            content_elements.append(elem)
             return
         if current_level < level:
             for child in elem.children:
-                collect_orig(child, current_level + 1)
+                collect(child, current_level + 1)
 
-    for root_child in sgraph.rootNode.children:
-        collect_orig(root_child, 1)
+    for root_child in model.rootNode.children:
+        collect(root_child, 1)
+    return content_elements, external_root
+
+
+def _multi_sbom_context(sgraph, level):
+    """Everything shared by the SBOMs of one level: content elements, lookups, identities.
+
+    Uses the ORIGINAL model for 3rd-party component collection (preserves version info),
+    and a generalized model for inter-element dependency detection.
+
+    bom-refs are slugified element names, suffixed deterministically ('-2', '-3', ... in
+    traversal order) when several content elements share a name — at repo level names are
+    unique, but a dir-level split makes collisions ordinary (every repo has a 'src').
+    """
+    from sgraph.algorithms.generalizer import generalize_model
+
+    orig_content_elements, orig_external_root = _content_elements_at_level(sgraph, level)
 
     # Build external name lookup from original model
     other_externals_by_name = {}
@@ -1000,96 +1005,139 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
             other_externals_by_name.setdefault(clean_name(e.name), []).append(e)
             stack += e.children
 
-    # --- Generalized model: for inter-repo dependency detection ---
     generalized = generalize_model(sgraph, level_to_generalize=level)
+    gen_content_elements, _ = _content_elements_at_level(generalized, level)
 
-    gen_content_elements = []
-    gen_external_root = None
-
-    def collect_gen(elem, current_level):
-        nonlocal gen_external_root
-        if elem.name == 'External' and not elem.typeEquals('dir') and not elem.typeEquals('repo'):
-            gen_external_root = elem
-            return
-        if current_level == level:
-            gen_content_elements.append(elem)
-            return
-        if current_level < level:
-            for child in elem.children:
-                collect_gen(child, current_level + 1)
-
-    for root_child in generalized.rootNode.children:
-        collect_gen(root_child, 1)
-
-    # Build path -> serial/ref mappings for all content elements (using original paths)
+    # Path -> serial/ref/element mappings for all content elements (using original paths)
     elem_serials = {}
     elem_bom_refs = {}
     orig_elem_by_path = {}
+    used_refs = {}
     for elem in orig_content_elements:
         path = elem.getPath()
         elem_serials[path] = deterministic_serial(path)
-        elem_bom_refs[path] = slugify_bom_ref(elem.name)
+        ref = slugify_bom_ref(elem.name)
+        used_refs[ref] = used_refs.get(ref, 0) + 1
+        if used_refs[ref] > 1:
+            ref = f'{ref}-{used_refs[ref]}'
+        elem_bom_refs[path] = ref
         orig_elem_by_path[path] = elem
 
-    # Build generalized element lookup by path for cross-repo deps
-    gen_elem_by_path = {elem.getPath(): elem for elem in gen_content_elements}
+    return {
+        'orig_content_elements': orig_content_elements,
+        'orig_external_root': orig_external_root,
+        'other_externals_by_name': other_externals_by_name,
+        'elem_serials': elem_serials,
+        'elem_bom_refs': elem_bom_refs,
+        'orig_elem_by_path': orig_elem_by_path,
+        'gen_elem_by_path': {elem.getPath(): elem for elem in gen_content_elements},
+    }
 
-    sboms = []
-    for orig_elem in orig_content_elements:
-        sbom = SBOM()
-        path = orig_elem.getPath()
-        serial = elem_serials[path]
-        ref = elem_bom_refs[path]
 
-        # Metadata component
-        sbom.metadata_component = {
-            'bom-ref': ref,
-            'type': 'application',
-            'name': orig_elem.name,
-            'version': '',
-            'purl': '',
-            'externalReferences': []
-        }
+def _sbom_for_content_element(orig_elem, ctx, transitive):
+    """One CycloneDX SBOM dict for one content element of a level context."""
+    sbom = SBOM()
+    path = orig_elem.getPath()
+    serial = ctx['elem_serials'][path]
+    ref = ctx['elem_bom_refs'][path]
 
-        if transitive:
-            sbom.components, dependencies = _transitive_components_and_dependencies(
-                path, gen_elem_by_path, orig_elem_by_path, elem_serials, elem_bom_refs,
-                orig_external_root, other_externals_by_name
-            )
-        else:
-            # 3rd party components from original model (preserves version info)
-            sbom.components = _collect_3rdparty_for_subtree(
-                orig_elem, orig_external_root, other_externals_by_name
-            )
+    # Metadata component
+    sbom.metadata_component = {
+        'bom-ref': ref,
+        'type': 'application',
+        'name': orig_elem.name,
+        'version': '',
+        'purl': '',
+        'externalReferences': []
+    }
 
-            # Dependencies section
-            depends_on = []
+    if transitive:
+        sbom.components, dependencies = _transitive_components_and_dependencies(
+            path, ctx['gen_elem_by_path'], ctx['orig_elem_by_path'], ctx['elem_serials'],
+            ctx['elem_bom_refs'], ctx['orig_external_root'], ctx['other_externals_by_name']
+        )
+    else:
+        # 3rd party components from original model (preserves version info)
+        sbom.components = _collect_3rdparty_for_subtree(
+            orig_elem, ctx['orig_external_root'], ctx['other_externals_by_name']
+        )
 
-            # 3rd party purl refs
-            for component in sbom.components:
-                depends_on.append(component['bom-ref'])
+        # Dependencies section
+        depends_on = []
 
-            # Internal cross-repo dependencies from generalized model (BOM-Link URNs)
-            gen_elem = gen_elem_by_path.get(path)
-            if gen_elem is not None:
-                for assoc in gen_elem.outgoing:
-                    target_path = assoc.toElement.getPath()
-                    if target_path in elem_serials and target_path != path:
-                        target_serial_uuid = elem_serials[target_path].replace('urn:uuid:', '')
-                        target_ref = elem_bom_refs[target_path]
-                        bom_link = f"urn:cdx:{target_serial_uuid}/1#{target_ref}"
-                        if bom_link not in depends_on:
-                            depends_on.append(bom_link)
+        # 3rd party purl refs
+        for component in sbom.components:
+            depends_on.append(component['bom-ref'])
 
-            dependencies = [{'ref': ref, 'dependsOn': depends_on}]
+        # Internal cross-element dependencies from generalized model (BOM-Link URNs)
+        gen_elem = ctx['gen_elem_by_path'].get(path)
+        if gen_elem is not None:
+            for assoc in gen_elem.outgoing:
+                target_path = assoc.toElement.getPath()
+                if target_path in ctx['elem_serials'] and target_path != path:
+                    target_serial = ctx['elem_serials'][target_path].replace('urn:uuid:', '')
+                    target_ref = ctx['elem_bom_refs'][target_path]
+                    bom_link = f"urn:cdx:{target_serial}/1#{target_ref}"
+                    if bom_link not in depends_on:
+                        depends_on.append(bom_link)
 
-        # Serialize
-        data = sbom.as_cyclonedx_json()
-        data['serialNumber'] = serial
-        data['dependencies'] = dependencies
-        sboms.append(data)
+        dependencies = [{'ref': ref, 'dependsOn': depends_on}]
 
-    return sboms
+    data = sbom.as_cyclonedx_json()
+    data['serialNumber'] = serial
+    data['dependencies'] = dependencies
+    return data
+
+
+def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
+                               transitive: bool = False) -> list[dict]:
+    """Generate one CycloneDX 1.7 SBOM per element at the given level.
+
+    :param sgraph: The loaded SGraph model
+    :param level: Tree depth at which to split into separate SBOMs
+    :param transitive: Inline the transitive closure of internal dependencies into each SBOM
+        so consumers that cannot follow BOM-Links across uploads (e.g. Dependency-Track) see
+        the full exposure chain within one BOM
+    :return: List of CycloneDX SBOM dicts
+    """
+    ctx = _multi_sbom_context(sgraph, level)
+    return [_sbom_for_content_element(orig_elem, ctx, transitive)
+            for orig_elem in ctx['orig_content_elements']]
+
+
+def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
+                                     transitive: bool = False) -> dict:
+    """Generate one CycloneDX 1.7 SBOM for the element at the given path.
+
+    The element (typically /Project/repo or /Project/repo/dir) becomes the SBOM's metadata
+    component and its descendants define the scope. Its peers at the same tree depth form the
+    internal-dependency universe — the same universe the level-based multi mode uses — so with
+    transitive=True the SBOM inlines the chain of directly and indirectly used internal
+    elements and their 3rd-party components, exactly like the multi mode does per element.
+
+    :param sgraph: The loaded SGraph model
+    :param element_path: Path of the element to root the SBOM at
+    :param transitive: Inline the transitive closure of internal dependencies
+    :return: One CycloneDX SBOM dict
+    :raises ValueError: When no element exists at the path, or it is in the External subtree
+    """
+    path = element_path.rstrip('/')
+    if not path.startswith('/'):
+        raise ValueError(f"Element path must be absolute (start with '/'): {element_path}")
+
+    if sgraph.findElementFromPath(path) is None:
+        raise ValueError(f'No element found at path {path}')
+
+    level = path.count('/')
+    ctx = _multi_sbom_context(sgraph, level)
+    orig_elem = ctx['orig_elem_by_path'].get(path)
+    if orig_elem is None:
+        # The element exists but the level walk never reached it: it is the External root
+        # itself or lives inside the External subtree, which holds 3rd-party components,
+        # not content to root an SBOM at.
+        raise ValueError(f'Element at {path} is in the External subtree, not content')
+
+    return _sbom_for_content_element(orig_elem, ctx, transitive)
 
 
 if __name__ == '__main__':
@@ -1098,22 +1146,29 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate CycloneDX SBOM from sgraph model')
     parser.add_argument('model', help='Path to model XML file')
     parser.add_argument('output', help='Path to output SBOM JSON file')
-    parser.add_argument('--level', type=int, default=None,
-                        help='Generate one SBOM per element at this tree depth. '
-                             'Without this flag, generates a single SBOM (legacy behavior).')
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument('--level', type=int, default=None,
+                       help='Generate one SBOM per element at this tree depth. '
+                            'Without this flag, generates a single SBOM (legacy behavior).')
+    scope.add_argument('--element-path', default=None,
+                       help='Generate one SBOM rooted at the element at this path '
+                            '(e.g. /Project/repo/dir); its descendants define the scope.')
     parser.add_argument('--transitive', action='store_true',
                         help='Inline the transitive closure of internal dependencies into '
                              'each SBOM so the full exposure chain resolves within one BOM '
                              '(for consumers like Dependency-Track that do not follow '
-                             'BOM-Links across uploads). Requires --level.')
+                             'BOM-Links across uploads). Requires --level or --element-path.')
     args = parser.parse_args()
 
-    if args.transitive and args.level is None:
-        parser.error('--transitive requires --level')
+    if args.transitive and args.level is None and args.element_path is None:
+        parser.error('--transitive requires --level or --element-path')
 
     g = SGraph.parse_xml_or_zipped_xml(args.model)
 
-    if args.level is not None:
+    if args.element_path is not None:
+        result = generate_for_element_from_sgraph(g, args.element_path,
+                                                  transitive=args.transitive)
+    elif args.level is not None:
         result = generate_multi_from_sgraph(g, level=args.level, transitive=args.transitive)
     else:
         result = generate_from_sgraph(g)
