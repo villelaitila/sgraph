@@ -1,0 +1,105 @@
+<model version="2.1">
+  <elements>
+    <e n="ExampleOrg">
+      <e n="repoA">
+        <e n="src">
+          <!-- The control for the self-reference rule: a real package reference. Consumer.dll and
+               Ionic.Zip do not share a stem, which is what every genuine package reference looks
+               like. Removing this leaves the self-reference rule unfalsifiable in this fixture. -->
+          <e i="10" n="Consumer.dll" t="file">
+            <r r="30" t="ref" />
+          </e>
+          <!-- The committed binary itself: same stem as the external element it references. -->
+          <e i="11" n="softagram_windows-x64_1_93_1.exe" t="file">
+            <r r="31" t="ref" />
+          </e>
+          <!-- Three referencers of one binary, shaped to pin both halves of the provenance rule.
+               The two TwoRefBinary.exe files live in different directories and carry the same
+               name, so citing names rather than paths collapses them to one entry; TwoRefBinary.dll
+               is a distinct name and stays a second entry, which is what makes the sort observable
+               rather than incidental. Removing any of the three makes one half unfalsifiable. -->
+          <e i="12" n="TwoRefBinary.dll" t="file">
+            <r r="49" t="ref" />
+          </e>
+          <e n="installer">
+            <e i="13" n="TwoRefBinary.exe" t="file">
+              <r r="49" t="ref" />
+            </e>
+          </e>
+          <e n="softwareupdates">
+            <e i="14" n="TwoRefBinary.exe" t="file">
+              <r r="49" t="ref" />
+            </e>
+          </e>
+        </e>
+      </e>
+      <e n="External">
+        <e n="Docker">
+          <e n="Image">
+            <e i="20" n="nginx of tag 1.25" />
+          </e>
+        </e>
+        <e n="Unknown_Binary_Files">
+          <e n="Ionic.Zip">
+            <e i="30" n="Ionic.Zip of version 1.9.1.8" repotype="Unknown_Binary_Files" />
+          </e>
+          <e n="softagram_windows-x64_1_93_1">
+            <e i="31" n="softagram_windows-x64_1_93_1 of version 1.95.0"
+              repotype="Unknown_Binary_Files" />
+          </e>
+          <e n="TwoRefBinary">
+            <e i="49" n="TwoRefBinary of version 2.0" repotype="Unknown_Binary_Files" />
+          </e>
+        </e>
+        <e n="Assemblies">
+          <e n="MsbuildLib">
+            <e i="40" n="MsbuildLib" version="$(VersionPrefix)" />
+          </e>
+          <e n="MavenStyleLib">
+            <e i="41" n="MavenStyleLib" version="${Version}" />
+          </e>
+          <!-- Partly resolved: the known part must survive, so the guard stays a fullmatch. -->
+          <e n="PartlyResolvedLib">
+            <e i="42" n="PartlyResolvedLib" version="1.0-$(Suffix)" />
+          </e>
+          <e n="BranchVersionLib">
+            <e i="43" n="BranchVersionLib" version="feature__slash__1.0" />
+          </e>
+          <e n="UrlVersionLib">
+            <e i="44" n="UrlVersionLib"
+              version="https:__slash____slash__github.com__slash__example__slash__lib.git" />
+          </e>
+          <!-- One NuGet package, spelled two ways. NuGet package ids are case-insensitive, so
+               these are the same package and must not be inventoried twice. -->
+          <e n="NLog">
+            <e i="45" n="NLog" version="5.0.0" />
+          </e>
+          <e n="nlog">
+            <e i="46" n="nlog" version="5.0.0" />
+          </e>
+        </e>
+        <e n="NPM">
+          <!-- The second control for case-insensitive deduplication, and the strongest of the
+               three: npm names have been lowercase by rule since 2015, but mixed-case packages
+               predating that rule were grandfathered in, so purl marks the type case-sensitive
+               and these are two real packages. Every npm purl in the largest local model is
+               already lowercase, so no real-model test can catch a regression here. -->
+          <e n="JSONStream">
+            <e i="47" n="JSONStream" version="1.3.5" />
+          </e>
+          <e n="jsonstream">
+            <e i="48" n="jsonstream" version="1.3.5" />
+          </e>
+        </e>
+        <e n="Maven">
+          <!-- The control for case-insensitive deduplication: Maven artifactIds are
+               case-sensitive, so these are two different artifacts and both must survive. -->
+          <e i="50" n="org.example CaseLib of version 1.0" artifactId="CaseLib"
+            groupId="org.example" repotype="Maven" version="1.0" />
+          <e i="51" n="org.example caselib of version 1.0" artifactId="caselib"
+            groupId="org.example" repotype="Maven" version="1.0" />
+        </e>
+      </e>
+    </e>
+  </elements>
+</model>

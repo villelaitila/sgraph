@@ -32,14 +32,26 @@ def valid_for_bom(elem):
 
 
 def extract_version(elem):
+    """The element's version, with sgraph's path-separator encoding decoded.
+
+    Decoding happens here rather than in purl_for so the component's disclosed version field
+    carries the true value too, not only the purl. Every source is decoded, not just the two that
+    read the version out of a name: an analyzer that copies a name-derived version into the
+    attribute carries the encoding with it, and which source a given element used is not
+    something the caller can see.
+    """
+    version = None
     if 'version' in elem.attrs:
-        return elem.attrs['version']
-    if 'versions' in elem.attrs:
-        return elem.attrs['versions']
-    if ' of version ' in elem.name:
-        return elem.name.split(' of version ')[-1].strip()
-    if ' of tag ' in elem.name:
-        return elem.name.split(' of tag ')[-1].strip()
+        version = elem.attrs['version']
+    elif 'versions' in elem.attrs:
+        version = elem.attrs['versions']
+    elif ' of version ' in elem.name:
+        version = elem.name.split(' of version ')[-1].strip()
+    elif ' of tag ' in elem.name:
+        version = elem.name.split(' of tag ')[-1].strip()
+    if version is None:
+        return None
+    return version.replace(VERSION_PATH_SEPARATOR_ENCODING, '/')
 
 
 def incoming_deps(elem, elem_name_patterns, deptypes):
@@ -95,17 +107,128 @@ PURL_TYPE_BY_REFERENCING_EXTENSION = {
 
 PURL_TYPE_SOURCE_PROPERTY = 'purlTypeResolution'
 
+# CycloneDX classifies a component by what it is, and 'library' — the value every component
+# carried before this mapping — is wrong for an image. Consumers route components by type, so an
+# image classified as a library is scanned as application code rather than as a base layer: the
+# misclassification changes what a consumer does with the row, not merely how it reads.
+# 'container' is a value of the component type enum in the CycloneDX 1.7 schema
+# (bom-1.7.schema.json), described there as a packaging and/or runtime format that isolates
+# software through virtualization technology.
+#
+# Keyed on the purl type rather than on the branch of purl_for that produced it, so a future
+# producer of the same purl type is classified correctly without a second edit here.
+#
+# 'oci' is the purl type registered for the same artifact class, and nothing emits it today: the
+# docker branch of purl_for is the only producer of an image purl in this module. It is mapped for
+# forward compatibility, which is also why the oci case is asserted directly on the function below
+# rather than through a fixture — no model can reach a purl the generator never builds, and a
+# fixture that appeared to would be testing a hand-written string, not this code.
+CYCLONEDX_TYPE_BY_PURL_TYPE = {
+    'docker': 'container',
+    'oci': 'container',
+}
+
+DEFAULT_CYCLONEDX_TYPE = 'library'
+
+# Package identity is case-insensitive in some ecosystems and case-significant in others, so the
+# deduplication key is folded only where the ecosystem's own purl type definition says two
+# spellings are one package. nuget's records that the name is "case-preserving, but
+# case-insensitive"; pypi's sets case_sensitive false.
+#
+# npm is deliberately absent even though its names have been lowercase by rule since 2015: its
+# type definition sets case_sensitive true, because mixed-case packages predating that rule were
+# grandfathered in, so JSONStream and jsonstream are two real packages. maven is case-significant
+# in both coordinates, golang's names are lowercase by rule so folding would be a rule that never
+# fires, and generic names are opaque. Folding any of them would merge two distinct components
+# into one and lose a row — a worse defect than the duplicate it set out to remove.
+#
+# pypi also normalizes '_' to '-', which is deliberately NOT applied: that rewrites the name
+# rather than its case, and belongs with the percent-encoding migration that is still deferred.
+CASE_INSENSITIVE_PURL_TYPES = {'nuget', 'pypi'}
+
+
+def purl_type_of(purl):
+    """The type segment of a purl, or '' when the string is not one."""
+    if not purl.startswith('pkg:'):
+        return ''
+    return purl[len('pkg:'):].split('/', 1)[0]
+
+
+def cyclonedx_component_type(purl):
+    """Map a purl to its CycloneDX component type, defaulting to 'library'.
+
+    The type is read off the emitted purl rather than passed in alongside it, so a component's
+    declared class and its identifier cannot disagree: there is one source of truth, the string
+    the consumer actually receives.
+
+    A string that is not a purl, including an empty one, takes the default. That is the value
+    every component carried before this mapping existed, so an unparseable purl leaves the row
+    exactly as it was rather than dropping it or inventing a class for it. None is not handled:
+    purl_for always returns a string, and a guard for a caller that does not exist would be
+    untested code asserting a contract nothing relies on.
+    """
+    return CYCLONEDX_TYPE_BY_PURL_TYPE.get(purl_type_of(purl), DEFAULT_CYCLONEDX_TYPE)
+
+
+def dedup_key(bom_ref):
+    """The identity under which two emitted components count as the same package.
+
+    Folds the key only. The emitted purl keeps whatever casing the model gave it, because
+    rewriting it to a folded form would change the identifier a consumer resolves — that is a
+    migration, not a deduplication, and it is not what this fix buys.
+
+    .lower() rather than .casefold(): these type definitions are about ASCII case, and Unicode
+    caseless matching would additionally merge names the ecosystems keep distinct.
+    """
+    if purl_type_of(bom_ref) in CASE_INSENSITIVE_PURL_TYPES:
+        return bom_ref.lower()
+    return bom_ref
+
+
 # Maven's model validator restricts groupId and artifactId to [A-Za-z0-9._-] at ERROR severity
 # for every POM, and that set is a strict subset of the characters purl leaves unencoded. So a
 # coordinate that passes this guard is spliced into the purl verbatim and needs no encoding
 # step, which is what makes deferring encoding coherent rather than a shortcut.
 MAVEN_COORDINATE = re.compile(r'^[A-Za-z0-9._-]+$')
 
-# A Maven version the analyzer captured before the build resolved it. Matched with fullmatch,
+# A version the analyzer captured before the build resolved it, in either dialect it is written
+# in: ${...} is Maven and Gradle property syntax, $(...) is MSBuild's. Matched with fullmatch,
 # deliberately: a version that merely contains an expression, such as '1.0-${suffix}', is partly
 # known, and dropping the known part would change which components exist under a rule nobody has
 # measured. Widening this to a substring search is the tempting simplification to refuse.
-UNRESOLVED_VERSION = re.compile(r'\$\{.+\}')
+#
+# '${}' and '$()' do not match, because '.+' requires content. An expression naming no property
+# resolves to nothing in any build either, so the narrower reading costs nothing.
+UNRESOLVED_VERSION = re.compile(r'\$\{.+\}|\$\(.+\)')
+
+# sgraph encodes '/' inside an element name as '__slash__', and a version lifted out of such a
+# name inherits the encoding. clean_name already decodes it out of names; versions were left raw,
+# so both the disclosed version and the purl advertised a literal '__slash__' that matches
+# nothing in any ecosystem.
+VERSION_PATH_SEPARATOR_ENCODING = '__slash__'
+
+# A version that is a URL names a place to fetch from, not a release. It identifies no published
+# version and matches no advisory, so carrying it in the purl asserts a version that exists
+# nowhere. Anchored at the start: a version that merely begins with a scheme-like word is not a
+# URL, and one that merely contains a URL is partly known — the same reasoning that keeps
+# UNRESOLVED_VERSION a fullmatch.
+URL_SHAPED_VERSION = re.compile(r'^[a-zA-Z][a-zA-Z0-9+.-]*://')
+
+# Names the reason a component has a disclosed version but a versionless purl, so a consumer can
+# tell "no version was known" from "the known value was not a version".
+VERSION_SOURCE_PROPERTY = 'versionSource'
+
+
+def is_unresolved_version(version):
+    """Whether a version is wholly a build-property expression, and so names no published release.
+
+    One predicate for every purl type. The rule began inside maven_purl and was applied nowhere
+    else, so every other ecosystem spliced the raw expression into its purl — a string that is
+    either non-canonical raw or canonical-but-unmatchable percent-encoded, and matches nothing
+    either way. maven_purl still routes through this rather than touching the pattern directly,
+    so the maven path and the shared path cannot drift apart.
+    """
+    return bool(UNRESOLVED_VERSION.fullmatch(version))
 
 
 def is_maven_coordinate(value):
@@ -150,6 +273,44 @@ def infer_pkgtype_from_referencing_files(elem):
     return winner, sorted(extensions_by_pkgtype[winner])
 
 
+def file_stem(elem):
+    """The name of a referencing element with its own extension removed.
+
+    The extension comes from file_extension rather than an independent rsplit('.'), so this
+    inherits that helper's t="file" handling instead of adding a second, subtly different
+    assumption about what a filename looks like. When file_extension resolved the extension from
+    an ancestor rather than from this element, the name does not end with it and the whole name is
+    returned — which is correct, since such an element is not a file and has no stem to speak of.
+    """
+    extension = file_extension(elem)
+    if extension and elem.name.lower().endswith('.' + extension.lower()):
+        return elem.name[:-(len(extension) + 1)]
+    return elem.name
+
+
+def referencing_files_named_after(elem):
+    """The referencing files whose stem is this element's own name, sorted and deduplicated.
+
+    An external whose name is exactly the stem of a file referencing it is not a package that file
+    depends on — it IS that committed binary, recorded as an external because the analyzer had
+    nowhere else to put it. A real package reference never looks like this: Ionic.Zip is referenced
+    from Consumer.dll, not from Ionic.Zip.dll.
+
+    Returns names, not paths, and sorted: the same binary is often referenced from several
+    directories (the acceptance data has one referenced from both an installer output and an
+    update directory), and those collapse to a single citation, while a genuine Foo.exe + Foo.dll
+    pair stays two. Sorting mirrors the tie-breaking in infer_pkgtype_from_referencing_files and
+    exists for the same reason: without it the emitted provenance would depend on association
+    traversal order and the SBOM would stop being byte-stable between runs.
+    """
+    name = clean_name(elem.name).lower()
+    matches = set()
+    for association in elem.incoming + (elem.parent.incoming if elem.parent else []):
+        if file_stem(association.fromElement).lower() == name:
+            matches.add(association.fromElement.name)
+    return sorted(matches)
+
+
 def maven_purl(elem, version):
     """Build the maven purl from an element's coordinates, or None when it has none usable.
 
@@ -170,7 +331,7 @@ def maven_purl(elem, version):
     artifact_id = elem.attrs.get('artifactId', '')
     if not (is_maven_coordinate(group_id) and is_maven_coordinate(artifact_id)):
         return None
-    if UNRESOLVED_VERSION.fullmatch(version):
+    if is_unresolved_version(version):
         return f'pkg:maven/{group_id}/{artifact_id}'
     return f'pkg:maven/{group_id}/{artifact_id}@{version}'
 
@@ -218,7 +379,38 @@ def purl_for(elem, v):
             pkgid = pkgid.split(' of tag ')[0]
     else:
         pkgtype, extensions = infer_pkgtype_from_referencing_files(elem)
-        if pkgtype is not None:
+        # A committed binary must not be typed from the extension of the file that IS it. The
+        # inference would answer nuget for a .exe, and pkg:nuget/softagram_windows-x64@1.95.0
+        # asserts a public NuGet package that does not exist — a dependency-confusion-shaped false
+        # positive for any consumer that resolves purls. 'generic' is the purl type with no default
+        # package repository, which is exactly what a binary committed into source control is.
+        #
+        # Checked only when a type was actually inferred: with no inferred type the element already
+        # takes the fallback, and claiming this reason there would cite evidence nothing acted on.
+        # The provenance value REPLACES the inference one rather than joining it, so the component
+        # never cites extension evidence the code declined to use.
+        #
+        # Known and accepted false positive: a vendored third-party binary — Newtonsoft.Json.dll
+        # committed into the repo, referencing external Newtonsoft.Json — matches this rule and is
+        # downgraded to generic, losing a real vulnerability match. Shipping as designed, on two
+        # grounds that are measured rather than assumed: this branch is reached at all by only 17
+        # components across 72 stored models (16 via exe, 1 via whl; no .dll has ever won a vote),
+        # and every downgrade carries provenance naming the referencing files, so the decision is
+        # auditable rather than silent.
+        #
+        # What is NOT claimed: that the vendored shape is rare. It does not occur anywhere in that
+        # corpus, but the corpus holds essentially no vendored .NET content, so this is absence of
+        # evidence, not evidence of absence. The one real discriminating case measured — aiortc, a
+        # genuine public PyPI package inferred from a .whl in odoo-fullstack — is correctly spared,
+        # because its name is not the stem of the file referencing it.
+        self_reference_files = referencing_files_named_after(elem)
+        if pkgtype is not None and self_reference_files:
+            pkgtype = FALLBACK_PURL_TYPE
+            properties.append({
+                'name': PURL_TYPE_SOURCE_PROPERTY,
+                'value': 'referencing file is the binary itself: ' + ','.join(self_reference_files)
+            })
+        elif pkgtype is not None:
             properties.append({
                 'name': PURL_TYPE_SOURCE_PROPERTY,
                 'value': 'inferred from referencing file extension: ' + ','.join(extensions)
@@ -228,6 +420,16 @@ def purl_for(elem, v):
             properties.append({'name': PURL_TYPE_SOURCE_PROPERTY, 'value': 'ecosystem unresolved'})
 
     v = v.lstrip('^')
+    # Both rules live here rather than in each branch above, so a purl type added later inherits
+    # them. The maven branch returns before reaching this point and applies the unresolved rule
+    # itself through the same predicate; a maven version is a POM <version> and never a URL.
+    if is_unresolved_version(v):
+        return f'pkg:{pkgtype}/{pkgid}', properties
+    if URL_SHAPED_VERSION.match(v):
+        # Disclosed rather than dropped: the raw value stays in the component's version field,
+        # and this property records why the purl carries no version.
+        properties.append({'name': VERSION_SOURCE_PROPERTY, 'value': v})
+        return f'pkg:{pkgtype}/{pkgid}', properties
     return f'pkg:{pkgtype}/{pkgid}@{v}', properties
 
 
@@ -415,7 +617,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
             'version': v,
             'bom-ref': ref,
             'purl': ref,
-            'type': 'library',
+            'type': cyclonedx_component_type(ref),
             'licenses': licenses,
             'scope': 'required',
             'properties': custom_properties,
@@ -525,8 +727,9 @@ def analyze_3rdparty(external_root, sbom):
     while stack:
         elem = stack.pop(0)
         for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root):
-            if bom_component['bom-ref'] not in seen_refs:
-                seen_refs.add(bom_component['bom-ref'])
+            key = dedup_key(bom_component['bom-ref'])
+            if key not in seen_refs:
+                seen_refs.add(key)
                 sbom.components.append(bom_component)
         stack += elem.children
 
@@ -634,8 +837,9 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
             target = assoc.toElement
             if target.isDescendantOf(external_root) or target == external_root:
                 for component in elem_as_bom_data(target, other_externals_by_name, external_root):
-                    if component['bom-ref'] not in seen_refs:
-                        seen_refs.add(component['bom-ref'])
+                    key = dedup_key(component['bom-ref'])
+                    if key not in seen_refs:
+                        seen_refs.add(key)
                         components.append(component)
         stack += elem.children
     return components

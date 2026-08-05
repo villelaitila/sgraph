@@ -492,3 +492,248 @@ def test_a_caret_prefixed_version_is_normalised_as_on_every_other_branch():
     purl, properties = sbom_cyclonedx_generator.purl_for(elem, '^1.0')
     assert purl == 'pkg:maven/org.example/example-lib@1.0'
     assert properties == []
+
+
+# --- component emission tests ---
+#
+# Five defects measured against the customer's 674 SBOMs, all local to this module: an image
+# emitted as a library, a build-property version spliced into a purl on every non-maven type, an
+# undecoded __slash__ in a version, one NuGet package inventoried twice under two spellings, and
+# a committed binary asserted to be a published NuGet package.
+
+EMISSION_MODEL = 'converters/modelfile_for_sbom_emission_tests.xml'
+
+
+def get_emission_components():
+    """Generate the emission SBOM and return its components as a list.
+
+    A list rather than a by-name index: the case-differing spellings this fixture carries collide
+    in a by-name dict until deduplication folds them together, and a dict would hide exactly the
+    defect the fixture exists to pin.
+    """
+    model, _ = get_model_and_model_api(EMISSION_MODEL)
+    return sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+
+
+def find_property(component, name):
+    """Return the value of a named CycloneDX property of a component, or None when absent.
+
+    Distinct from purl_type_resolution above, which reads one fixed property name; this reads any
+    of them, and the versionless-purl rules below each need a different one.
+    """
+    for prop in component.get('properties', []):
+        if prop['name'] == name:
+            return prop['value']
+    return None
+
+
+def emission_component(name):
+    """Return the one component with this name, failing when it is absent or not unique."""
+    matches = [component for component in get_emission_components() if component['name'] == name]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
+def test_a_docker_image_is_emitted_as_a_container_not_a_library():
+    """CycloneDX has a component type for an image, and the purl type already says it is one.
+
+    'library' on an image is not a harmless default: consumers route components by type, and an
+    image classified as a library is scanned as application code rather than as a base layer.
+    """
+    component = emission_component('nginx')
+    assert component['purl'] == 'pkg:docker/nginx@1.25'
+    assert component['type'] == 'container'
+
+
+def test_a_package_that_is_not_an_image_stays_a_library():
+    """Anti-vacuity for the mapping: it must retype images only, not everything."""
+    assert emission_component('Ionic.Zip')['type'] == 'library'
+
+
+def test_the_oci_purl_type_is_a_container_too():
+    """oci names the same artifact class docker does, and no fixture can reach that branch.
+
+    Nothing in this module emits pkg:oci today, so the mapping is asserted directly rather than
+    through a model. The nuget case is the control: without it a mapping that answered
+    'container' unconditionally would pass.
+    """
+    assert sbom_cyclonedx_generator.cyclonedx_component_type('pkg:oci/nginx@1.25') == 'container'
+    assert sbom_cyclonedx_generator.cyclonedx_component_type('pkg:nuget/X@1.0') == 'library'
+
+
+def test_an_msbuild_property_version_yields_a_versionless_purl():
+    """$(...) is MSBuild's expression syntax and names no published version, exactly as ${...}.
+
+    The rule already existed for maven and was applied nowhere else, so every other ecosystem
+    kept splicing the unresolved expression into the purl.
+    """
+    component = emission_component('MsbuildLib')
+    assert component['purl'] == 'pkg:nuget/MsbuildLib'
+    assert component['version'] == '$(VersionPrefix)'
+
+
+def test_an_unresolved_expression_is_unresolved_on_every_type_not_only_maven():
+    """The same ${...} the maven branch already refused must not be spliced in on a nuget purl."""
+    component = emission_component('MavenStyleLib')
+    assert component['purl'] == 'pkg:nuget/MavenStyleLib'
+    assert component['version'] == '${Version}'
+
+
+def test_a_partly_resolved_msbuild_version_keeps_its_version():
+    """The fullmatch discipline the maven branch established survives the widening.
+
+    A version that merely contains an expression is partly known, and dropping the known part
+    would change which components exist under a rule nobody has measured.
+    """
+    component = emission_component('PartlyResolvedLib')
+    assert component['purl'] == 'pkg:nuget/PartlyResolvedLib@1.0-$(Suffix)'
+
+
+def test_the_unresolved_version_guard_matches_both_expression_dialects():
+    """Direct guard on the pattern, including the empty-expression and bare-dollar controls."""
+    for value in ('${project.version}', '$(VersionPrefix)', '$(Ver)'):
+        assert sbom_cyclonedx_generator.UNRESOLVED_VERSION.fullmatch(value), value
+    for value in ('1.0', '1.0-${suffix}', '1.0-$(suffix)', '$', '${}', '$()', ''):
+        assert not sbom_cyclonedx_generator.UNRESOLVED_VERSION.fullmatch(value), value
+
+
+def test_a_slash_encoded_version_is_decoded_like_a_name():
+    """__slash__ is sgraph's encoding of '/' and clean_name already decodes it out of names.
+
+    A version carries the same encoding and was left raw, so both the disclosed version and the
+    purl advertised a literal '__slash__' that matches nothing anywhere.
+    """
+    component = emission_component('BranchVersionLib')
+    assert component['version'] == 'feature/1.0'
+    assert component['purl'] == 'pkg:nuget/BranchVersionLib@feature/1.0'
+
+
+def test_a_url_shaped_version_yields_a_versionless_purl_and_records_its_source():
+    """A URL is a location, not a version: it names no release and matches no advisory.
+
+    Omitting it keeps the purl canonical and package-level matchable, and the URL stays disclosed
+    twice over — in the version field, and in a property saying why the purl has no version.
+    """
+    component = emission_component('UrlVersionLib')
+    assert component['purl'] == 'pkg:nuget/UrlVersionLib'
+    assert component['version'] == 'https://github.com/example/lib.git'
+    assert find_property(component, 'versionSource') == 'https://github.com/example/lib.git'
+
+
+def test_case_differing_nuget_spellings_are_one_package():
+    """NuGet package ids are case-insensitive, so two spellings are one package, not two.
+
+    Emitting both inflates the inventory and makes the same advisory arrive twice, once per
+    spelling. The surviving spelling is the first in document order so output stays byte-stable.
+    """
+    nlog_components = [component for component in get_emission_components()
+                       if component['name'].lower() == 'nlog']
+    assert len(nlog_components) == 1
+    assert nlog_components[0]['purl'] == 'pkg:nuget/NLog@5.0.0'
+
+
+def test_case_differing_maven_artifacts_stay_two_packages():
+    """Control against over-broad folding: Maven identity is case-sensitive in both coordinates.
+
+    Folding every type would collapse these two real, distinct artifacts into one and lose a
+    component outright — a strictly worse defect than the duplicate it set out to remove.
+    """
+    maven_purls = {component['purl'] for component in get_emission_components()
+                   if component['purl'].startswith('pkg:maven/')}
+    assert maven_purls == {'pkg:maven/org.example/CaseLib@1.0',
+                           'pkg:maven/org.example/caselib@1.0'}
+
+
+def test_case_differing_npm_names_stay_two_packages():
+    """Control against widening the fold set: npm identity is case-sensitive by type definition.
+
+    The 2015 rule that a new package name must not contain uppercase letters is about *new*
+    names; mixed-case packages predating it were grandfathered in, which is why purl marks the
+    npm type case-sensitive. This is the control most worth having, because every npm purl in the
+    largest local model is already lowercase — no real-model measurement can catch this
+    regression, so only this fixture stands between the fold set and a silent identity merge.
+    """
+    npm_purls = {component['purl'] for component in get_emission_components()
+                 if component['purl'].startswith('pkg:npm/')}
+    assert npm_purls == {'pkg:npm/JSONStream@1.3.5', 'pkg:npm/jsonstream@1.3.5'}
+
+
+def test_a_binary_that_is_its_own_referencing_file_is_not_a_nuget_package():
+    """An external whose name is the stem of the file referencing it IS that committed binary.
+
+    pkg:nuget/<name> asserts a public NuGet package that does not exist — a
+    dependency-confusion-shaped false positive for any consumer resolving purls. generic is the
+    purl type with no default package repository, which is exactly what a committed binary is.
+    """
+    component = emission_component('softagram_windows-x64_1_93_1')
+    assert component['purl'] == 'pkg:generic/softagram_windows-x64_1_93_1@1.95.0'
+    assert purl_type_resolution(component) == \
+        'referencing file is the binary itself: softagram_windows-x64_1_93_1.exe'
+
+
+def test_the_self_reference_provenance_is_sorted_and_deduplicated():
+    """Several referencing files must yield one deterministic citation, not a traversal-order one.
+
+    The fixture references TwoRefBinary from two identically named .exe files in different
+    directories and from one .dll. Citing names rather than paths collapses the two .exe rows to a
+    single entry — the real acceptance data has exactly this shape, a binary referenced from both
+    an installer output and an update directory — while the .dll stays a second entry. Sorting is
+    what makes the pair's order independent of which association the walk reached first, which is
+    the same byte-stability guarantee infer_pkgtype_from_referencing_files already provides.
+    """
+    component = emission_component('TwoRefBinary')
+    assert component['purl'] == 'pkg:generic/TwoRefBinary@2.0'
+    assert purl_type_resolution(component) == \
+        'referencing file is the binary itself: TwoRefBinary.dll,TwoRefBinary.exe'
+
+
+def test_folding_uses_ascii_lowercasing_not_unicode_casefolding():
+    """Defends the documented choice of .lower() over .casefold() with the pair that separates them.
+
+    'ß'.casefold() is 'ss', so casefolding would declare Straße and STRASSE the same NuGet package
+    and drop one of them. .lower() leaves 'ß' alone and keeps them distinct. Every ASCII fixture
+    passes under either function, so only a non-ASCII pair can fail if the two are swapped.
+    """
+    assert 'Straße'.casefold() == 'strasse'.casefold()  # the premise: casefold would merge these
+    assert sbom_cyclonedx_generator.dedup_key('pkg:nuget/Straße@1.0') != \
+        sbom_cyclonedx_generator.dedup_key('pkg:nuget/STRASSE@1.0')
+
+
+def test_a_version_that_merely_contains_a_url_keeps_its_version():
+    """Defends the URL rule's anchoring: it matches a version that IS a URL, not one holding one.
+
+    The negative assertion uses search, not match, deliberately. re.match anchors at position 0 by
+    definition, so a match-based assertion here would hold for any pattern that fails at position 0
+    — including one with the '^' deleted — and would be true for the wrong reason, closing nothing.
+    search is the only call that can distinguish an anchored pattern from an unanchored one, so
+    this is the assertion that fails if the '^' is dropped and a partly known version such as
+    '1.0+https://…' silently loses its version.
+
+    Written against the pattern directly because no stored model carries such a version.
+    """
+    assert sbom_cyclonedx_generator.URL_SHAPED_VERSION.match('https://example.com/x.git')
+    assert not sbom_cyclonedx_generator.URL_SHAPED_VERSION.search('1.0+https://example.com/x.git')
+
+
+def test_a_package_referenced_by_a_differently_named_file_keeps_its_inferred_type():
+    """Anti-vacuity for the rule above: a real package reference never shares the file's stem.
+
+    Ionic.Zip is referenced from Consumer.dll, the ordinary shape, and must keep both its
+    inferred type and the provenance that says the type was inferred.
+    """
+    component = emission_component('Ionic.Zip')
+    assert component['purl'] == 'pkg:nuget/Ionic.Zip@1.9.1.8'
+    assert purl_type_resolution(component) == 'inferred from referencing file extension: dll'
+
+
+def test_the_emission_fixture_yields_fourteen_distinct_components():
+    """Anti-vacuity for the fixture, and the collapse guard for the two versionless rules.
+
+    Fourteen, not fifteen: the two NuGet spellings are one package, while the two npm spellings
+    and the two Maven artifacts are four separate ones. A lookup above raises when an element
+    vanishes, but an element added, or two bom-refs collapsed into one when a version is omitted,
+    would otherwise go unnoticed — and omitting a version is exactly what two of these rules do.
+    """
+    components = get_emission_components()
+    assert len(components) == 14
+    assert len({component['bom-ref'] for component in components}) == 14
