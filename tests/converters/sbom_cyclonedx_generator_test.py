@@ -4,7 +4,7 @@ from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sbom_cyclonedx_generator import (
     deterministic_serial, slugify_bom_ref, generate_multi_from_sgraph,
-    infer_pkgtype_from_referencing_files
+    generate_for_element_from_sgraph, infer_pkgtype_from_referencing_files
 )
 from ..modelapi_test import get_model_and_model_api
 
@@ -273,6 +273,134 @@ def test_transitive_dedup_folds_case_like_the_per_subtree_walk():
     # otherwise the fold reintroduces a dangling ref inside the BOM
     entries = {d['ref']: d['dependsOn'] for d in repo_a_sbom['dependencies']}
     assert entries[slugify_bom_ref('repoB')] == ['pkg:nuget/NLog@5.0.0']
+
+
+# --- Selected-element SBOM tests ---
+#
+# One SBOM for one chosen element (typically /Project/repo or /Project/repo/dir): the element
+# is the metadata component, its descendants define the scope, and the peers at the same tree
+# depth form the internal-dependency universe — the same universe the level-based multi mode
+# uses, so a selected-element SBOM composes with the multi output instead of contradicting it.
+
+
+def test_selected_element_sbom_names_the_element_and_keeps_the_deterministic_serial():
+    """The chosen element becomes the metadata component of a single SBOM."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA')
+
+    assert isinstance(sbom, dict)
+    assert sbom['metadata']['component']['name'] == 'repoA'
+    assert sbom['serialNumber'] == deterministic_serial('/OrgName/GroupA/repoA')
+
+    component_names = [c['name'] for c in sbom['components']]
+    assert 'Newtonsoft.Json' in component_names
+    assert not any('commons-lang3' in n for n in component_names)
+
+    # Non-transitive keeps the multi-mode contract: internal deps stay BOM-Link URNs
+    assert len(sbom['dependencies']) == 1
+    repo_b_serial = deterministic_serial('/OrgName/GroupA/repoB').replace('urn:uuid:', '')
+    assert any(ref.startswith('urn:cdx:') and repo_b_serial in ref
+               for ref in sbom['dependencies'][0]['dependsOn'])
+
+
+def test_selected_element_sbom_transitive_inlines_the_chain():
+    """transitive=True gives the selected element the same inlined exposure chain as multi mode."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA', transitive=True)
+
+    components_by_name = {c['name']: c for c in sbom['components']}
+    assert find_property(components_by_name['repoB'], 'softagram:internal') == 'true'
+    commons = next(c for n, c in components_by_name.items() if 'commons-lang3' in n)
+    assert find_property(commons, 'softagram:via') == 'repoB'
+
+    entries = {d['ref']: d['dependsOn'] for d in sbom['dependencies']}
+    root_ref = sbom['metadata']['component']['bom-ref']
+    assert slugify_bom_ref('repoB') in entries[root_ref]
+    assert any('commons-lang3' in ref for ref in entries[slugify_bom_ref('repoB')])
+
+    known_refs = {c['bom-ref'] for c in sbom['components']} | {root_ref}
+    for depends_on in entries.values():
+        assert all(ref in known_refs for ref in depends_on)
+
+
+def test_selected_element_accepts_a_deeper_directory_path():
+    """A dir-level path works, and same-named peers at that depth get distinct bom-refs."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src', transitive=True)
+
+    assert sbom['metadata']['component']['name'] == 'src'
+    assert sbom['serialNumber'] == deterministic_serial('/OrgName/GroupA/repoA/src')
+
+    # repoB's src is reached through main.cs -> lib.cs and inlined as an internal component
+    internal = [c for c in sbom['components']
+                if find_property(c, 'softagram:internal') == 'true']
+    assert len(internal) == 1
+    assert internal[0]['name'] == 'src'
+    # Both elements are named 'src'; the internal peer's ref must not collide with the root's
+    root_ref = sbom['metadata']['component']['bom-ref']
+    assert internal[0]['bom-ref'] != root_ref
+
+    commons = next(c for c in sbom['components'] if 'commons-lang3' in c['name'])
+    assert find_property(commons, 'softagram:via') == 'src'
+
+    entries = {d['ref']: d['dependsOn'] for d in sbom['dependencies']}
+    assert internal[0]['bom-ref'] in entries[root_ref]
+    assert any('commons-lang3' in ref for ref in entries[internal[0]['bom-ref']])
+
+
+def test_selected_element_unknown_path_raises():
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    try:
+        generate_for_element_from_sgraph(model, '/OrgName/GroupA/nonexistent')
+        assert False, 'expected ValueError'
+    except ValueError as e:
+        assert '/OrgName/GroupA/nonexistent' in str(e)
+
+
+def test_selected_element_under_external_raises():
+    """The External subtree holds 3rd-party components, not products — refuse to root there."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    try:
+        generate_for_element_from_sgraph(model, '/OrgName/External/Maven')
+        assert False, 'expected ValueError'
+    except ValueError as e:
+        assert 'External' in str(e)
+
+
+def test_cli_exports_a_selected_element(tmp_path):
+    """--element-path exports one SBOM for the chosen element, composable with --transitive."""
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    out_path = tmp_path / 'sbom.json'
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(out_path), '--element-path', '/OrgName/GroupA/repoA', '--transitive'],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    sbom = json.loads(out_path.read_text())
+    assert isinstance(sbom, dict)
+    assert sbom['metadata']['component']['name'] == 'repoA'
+    assert any(find_property(c, 'softagram:internal') == 'true' for c in sbom['components'])
+
+
+def test_cli_rejects_element_path_combined_with_level(tmp_path):
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(tmp_path / 'out.json'),
+         '--element-path', '/OrgName/GroupA/repoA', '--level', '3'],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert 'not allowed with' in proc.stderr or 'mutually exclusive' in proc.stderr
 
 
 def test_cli_supports_the_transitive_flag(tmp_path):
