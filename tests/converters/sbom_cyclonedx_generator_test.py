@@ -439,6 +439,50 @@ def test_cli_rejects_transitive_without_level(tmp_path):
     assert '--transitive requires --level' in proc.stderr
 
 
+# --- Element location tests ---
+#
+# The model position of an element is published two ways: the native CycloneDX 'group' field
+# (the parent's full path) and a 'softagram:elementPath' property (the element's own path).
+# The property is the exact string deterministic_serial() hashes, so it is verifiable.
+
+
+def test_purl_and_version_stay_empty_on_the_metadata_component():
+    """Characterization: the metadata component has no package identity, and must not gain one.
+
+    Guards against a later 'fill the empty field' edit putting the element path into purl, where
+    it would violate the purl grammar and be rejected by a purl-parsing consumer.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert len(result) == 2
+    for sbom in result:
+        assert sbom['metadata']['component']['purl'] == ''
+        assert sbom['metadata']['component']['version'] == ''
+
+
+def test_bom_ref_stays_the_slug_not_the_path():
+    """Characterization: bom-ref is referenced from other SBOMs and must not become the path."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    refs = sorted(sbom['metadata']['component']['bom-ref'] for sbom in result)
+    assert refs == ['repoa', 'repob']
+
+
+def test_serial_numbers_stay_derived_from_the_element_path():
+    """Characterization: serialNumber == deterministic_serial(element_path), and stays that way.
+
+    Re-ingesting a model must update the same projects rather than create new ones.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    serials = {sbom['metadata']['component']['name']: sbom['serialNumber'] for sbom in result}
+    assert serials['repoA'] == deterministic_serial('/OrgName/GroupA/repoA')
+    assert serials['repoB'] == deterministic_serial('/OrgName/GroupA/repoB')
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
