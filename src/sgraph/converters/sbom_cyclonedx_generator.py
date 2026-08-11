@@ -990,18 +990,25 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
             refs.append(surviving_ref_by_key[key])
         external_refs_of[path] = refs
 
-    # Reachable internal elements become components of this BOM
+    # Reachable internal elements become components of this BOM. They describe model elements,
+    # so they publish their location and repository too: a consumer of one transitive BOM can
+    # then place every link of the exposure chain in the tree, not only the element the BOM is
+    # rooted at.
     for path in order[1:]:
         serial_uuid = elem_serials[path].replace('urn:uuid:', '')
-        components.append({
+        internal_elem = orig_elem_by_path[path]
+        internal_component = {
             'bom-ref': elem_bom_refs[path],
             'type': 'library',
-            'name': orig_elem_by_path[path].name,
+            'name': internal_elem.name,
             'version': '',
             'purl': '',
             'properties': [{'name': 'softagram:internal', 'value': 'true'}],
             'externalReferences': [{'url': f'urn:cdx:{serial_uuid}/1', 'type': 'bom'}],
-        })
+        }
+        _add_element_location(internal_component, internal_elem)
+        _add_vcs_reference(internal_component, internal_elem)
+        components.append(internal_component)
 
     # Multi-entry dependency graph: every ref resolves within this BOM
     dependencies = []

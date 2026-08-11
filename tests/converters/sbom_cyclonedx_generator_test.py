@@ -654,6 +654,49 @@ def test_a_blank_repo_url_does_not_mask_a_real_one_further_up():
     ]
 
 
+def test_transitive_internal_components_carry_their_location():
+    """Every link of the inlined exposure chain says where it lives, not just the chain's root."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_b = next(c for c in sbom_of(result, 'repoA')['components'] if c['name'] == 'repoB')
+    assert repo_b['group'] == '/OrgName/GroupA'
+    assert find_property(repo_b, 'softagram:elementPath') == '/OrgName/GroupA/repoB'
+    # The pre-existing internal marker survives alongside the new property
+    assert find_property(repo_b, 'softagram:internal') == 'true'
+    # repoB has no repo_url in the fixture, so it gets no vcs reference
+    assert [r for r in repo_b['externalReferences'] if r['type'] == 'vcs'] == []
+
+
+def test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location():
+    """GroupA's transitive SBOM holds two components named 'shared' — one of them is itself.
+
+    The two share a name, so a consumer reading names alone cannot tell which repository each
+    component is. group, elementPath and the vcs URL answer that; the bom link then resolves
+    the inlined one to its own standalone document. This is the case the feature exists for.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    host = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupA')
+    inlined = next(c for c in host['components']
+                   if find_property(c, 'softagram:internal') == 'true')
+
+    assert inlined['name'] == host['metadata']['component']['name'] == 'shared'
+    assert inlined['group'] == '/OrgName/GroupB'
+    assert find_property(inlined, 'softagram:elementPath') == '/OrgName/GroupB/shared'
+
+    # List comprehensions rather than a {type: url} dict: these pin cardinality too, so a
+    # regression emitting a second vcs entry cannot pass by last-wins.
+    vcs = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/groupb-shared.git']
+
+    mirror = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupB')
+    mirror_serial = mirror['serialNumber'].replace('urn:uuid:', '')
+    bom_links = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'bom']
+    assert bom_links == [f'urn:cdx:{mirror_serial}/1']
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
