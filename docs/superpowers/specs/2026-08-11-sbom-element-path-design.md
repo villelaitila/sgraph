@@ -168,16 +168,25 @@ def _add_element_location(component, elem):
     """Publish where elem sits in the model, on a component that describes elem.
 
     'group' carries the parent's full path rather than its bare name so two identically named
-    groups under different roots stay distinguishable, and is omitted at the top level, where
-    there is no parent to name. The element's own path goes into a property because CycloneDX
-    sets additionalProperties: false on component; it is also the exact string
-    deterministic_serial() hashes, so a consumer can verify the identity without the model.
+    groups under different roots stay distinguishable, and is omitted for a top-level element,
+    whose parent is the model root and has no path of its own. The element's own path goes into
+    a property because CycloneDX sets additionalProperties: false on component; it is also the
+    exact string deterministic_serial() hashes, so a consumer can verify the identity without
+    the model.
+
+    Call once per component: this overwrites 'group' and appends to 'properties'. elem must be
+    attached to a model. A detached element is not merely unsupported here, it is dangerous:
+    getPath() would return a bare name with no leading slash, and publishing that as an
+    elementPath yields a document a consumer cannot resolve and cannot detect as broken.
+    Raising at the call site is the better failure.
     """
-    parent_path = elem.parent.getPath() if elem.parent is not None else ''
+    parent_path = elem.parent.getPath()
     if parent_path:
         component['group'] = parent_path
-    component.setdefault('properties', []).append(
-        {'name': ELEMENT_PATH_PROPERTY, 'value': elem.getPath()})
+    component.setdefault('properties', []).append({
+        'name': ELEMENT_PATH_PROPERTY,
+        'value': elem.getPath()
+    })
 
 
 def _add_vcs_reference(component, elem):
@@ -196,9 +205,11 @@ def _add_vcs_reference(component, elem):
         elem = elem.parent
 ```
 
-`getPath()` returns `''` for the model root and for a level-1 element's parent, so
-`if parent_path:` is the entire top-level guard — no `parent is None` special case is needed for
-the omission, only for safety when an element is detached.
+`getPath()` returns `''` for the model root, which is a level-1 element's parent, so
+`if parent_path:` is the entire top-level guard. There is deliberately **no** `parent is None`
+fallback: it is unreachable from every call site, and where it would fire it would emit
+`elementPath` as a bare name with no leading slash — a value that looks like a path but resolves
+to nothing. Raising beats publishing that.
 
 ### Three call sites
 
