@@ -483,6 +483,72 @@ def test_serial_numbers_stay_derived_from_the_element_path():
     assert serials['repoB'] == deterministic_serial('/OrgName/GroupA/repoB')
 
 
+def test_metadata_component_carries_element_path():
+    """The full model path is published as a property, because CycloneDX has no field for it."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoA')['metadata']['component']
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA'
+
+
+def test_metadata_component_carries_the_parent_path_as_group():
+    """group holds the parent's full path, so two same-named groups stay distinguishable."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert sbom_of(result, 'repoA')['metadata']['component']['group'] == '/OrgName/GroupA'
+    assert sbom_of(result, 'repoB')['metadata']['component']['group'] == '/OrgName/GroupA'
+
+
+def test_element_path_matches_the_serial_number_for_every_sbom():
+    """The published path must be the same string the serial was derived from.
+
+    This is the invariant that makes the property verifiable rather than decorative: it catches a
+    future refactor that derives one from a normalised path and the other from the raw one.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert len(result) == 2
+    for sbom in result:
+        path = find_property(sbom['metadata']['component'], 'softagram:elementPath')
+        assert deterministic_serial(path) == sbom['serialNumber']
+
+
+def test_element_location_is_level_agnostic():
+    """At level 2 the element is the group itself, and its parent is the estate root."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=2)
+
+    component = sbom_of(result, 'GroupA')['metadata']['component']
+    assert component['group'] == '/OrgName'
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA'
+
+
+def test_group_is_absent_at_the_top_level():
+    """A top-level element has no parent to name, so the key is omitted rather than emitted empty.
+
+    An empty group cannot be told apart from 'the tool forgot to fill it in'; an absent one can.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=1)
+
+    component = sbom_of(result, 'OrgName')['metadata']['component']
+    assert 'group' not in component
+    assert find_property(component, 'softagram:elementPath') == '/OrgName'
+
+
+def test_selected_element_sbom_also_carries_its_location():
+    """--element-path routes through the same helper as --level, so it gets the same fields."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src')
+
+    component = sbom['metadata']['component']
+    assert component['group'] == '/OrgName/GroupA/repoA'
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA/src'
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'

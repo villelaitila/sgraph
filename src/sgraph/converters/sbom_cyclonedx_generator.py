@@ -762,6 +762,36 @@ def analyze_3rdparty(external_root, sbom):
         stack += elem.children
 
 
+ELEMENT_PATH_PROPERTY = 'softagram:elementPath'
+
+
+def _add_element_location(component, elem):
+    """Publish where elem sits in the model, on a component that describes elem.
+
+    'group' carries the parent's full path rather than its bare name so that two identically
+    named groups under different roots stay distinguishable, and is omitted for a top-level
+    element, whose parent is the model root and has no path of its own.
+
+    The element's own path goes into a property because CycloneDX sets additionalProperties:
+    false on component, leaving properties[] as the only schema-valid place for it. It is also
+    the exact string deterministic_serial() hashes, so publishing it verbatim lets a consumer
+    verify the document's identity without loading the model.
+
+    Call once per component: this overwrites 'group' and appends to 'properties'. elem must be
+    attached to a model. A detached element is not merely unsupported here, it is dangerous:
+    getPath() would return a bare name with no leading slash, and publishing that as an
+    elementPath yields a document a consumer cannot resolve and cannot detect as broken.
+    Raising at the call site is the better failure.
+    """
+    parent_path = elem.parent.getPath()
+    if parent_path:
+        component['group'] = parent_path
+    component.setdefault('properties', []).append({
+        'name': ELEMENT_PATH_PROPERTY,
+        'value': elem.getPath()
+    })
+
+
 class SBOM:
 
     BASIC_INFO = {
@@ -1050,6 +1080,7 @@ def _sbom_for_content_element(orig_elem, ctx, transitive):
         'purl': '',
         'externalReferences': []
     }
+    _add_element_location(sbom.metadata_component, orig_elem)
 
     if transitive:
         sbom.components, dependencies = _transitive_components_and_dependencies(
