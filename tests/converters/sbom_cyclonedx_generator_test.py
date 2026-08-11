@@ -581,6 +581,79 @@ def test_mirrored_repositories_are_distinguished_by_their_location():
     assert len({sbom['serialNumber'] for sbom in result}) == 2
 
 
+def test_vcs_reference_comes_from_the_elements_own_repo_url():
+    """The model already holds the repository URL; CycloneDX has a proper field for it."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoA')['metadata']['component']
+    vcs = [r['url'] for r in component['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/repoA.git']
+
+
+def test_vcs_reference_is_inherited_from_the_nearest_ancestor():
+    """A directory-level SBOM belongs to its repository's VCS, one level up."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src')
+
+    vcs = [r['url'] for r in sbom['metadata']['component']['externalReferences']
+           if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/repoA.git']
+
+
+def test_no_vcs_reference_when_no_ancestor_has_one():
+    """Absent, never invented: a consumer cannot tell a fabricated URL from a real one."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoB')['metadata']['component']
+    assert [r for r in component['externalReferences'] if r['type'] == 'vcs'] == []
+
+
+def test_mirrored_repositories_carry_their_own_distinct_repository_urls():
+    """Two mirrors of one name are two different repositories, each with its own remote."""
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    by_group = {sbom['metadata']['component']['group']: sbom['metadata']['component']
+                for sbom in result}
+    assert [r['url'] for r in by_group['/OrgName/GroupA']['externalReferences']
+            if r['type'] == 'vcs'] == ['https://example.org/org/groupa-shared.git']
+    assert [r['url'] for r in by_group['/OrgName/GroupB']['externalReferences']
+            if r['type'] == 'vcs'] == ['https://example.org/org/groupb-shared.git']
+
+
+def test_nearest_repo_url_wins_over_a_more_distant_ancestor():
+    """A sub-repo's own remote describes it; its parent group's does not.
+
+    Without this, a farthest-ancestor-wins regression passes the whole suite: no other fixture
+    has two repo_url attributes on one chain, so nothing else can tell the two rules apart.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = next(s['metadata']['component'] for s in result
+                     if s['metadata']['component']['group'] == '/OrgName/GroupA')
+    vcs = [r['url'] for r in component['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/groupa-shared.git']
+
+
+def test_a_blank_repo_url_does_not_mask_a_real_one_further_up():
+    """A blank attribute is not an answer. Publishing it would also hide a recoverable URL."""
+    model = SGraph(SElement(None, ''))
+    model.createOrGetElementFromPath('/Org/repo/sub')
+    model.findElementFromPath('/Org/repo').attrs['repo_url'] = 'https://example.org/repo.git'
+    model.findElementFromPath('/Org/repo/sub').attrs['repo_url'] = '   '
+
+    component = {}
+    sbom_cyclonedx_generator._add_vcs_reference(
+        component, model.findElementFromPath('/Org/repo/sub'))
+
+    assert component['externalReferences'] == [
+        {'url': 'https://example.org/repo.git', 'type': 'vcs'}
+    ]
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'

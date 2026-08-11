@@ -2,7 +2,7 @@
   <elements>
     <e n="OrgName">
       <e n="GroupA">
-        <e n="repoA">
+        <e n="repoA" repo_url="https://example.org/org/repoA.git">
           <e n="src">
             <e i="10" n="main.cs">
               <r r="20" t="use" />

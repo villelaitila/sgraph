@@ -1,7 +1,7 @@
 <model version="2.1">
   <elements>
     <e n="OrgName">
-      <e n="GroupA">
+      <e n="GroupA" repo_url="https://example.org/org/groupa-estate.git">
         <e n="shared" repo_url="https://example.org/org/groupa-shared.git">
           <e n="src">
             <e i="10" n="main.cs">

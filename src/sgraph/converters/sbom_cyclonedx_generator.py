@@ -792,6 +792,33 @@ def _add_element_location(component, elem):
     })
 
 
+def _add_vcs_reference(component, elem):
+    """Publish the repository URL of elem, or of the nearest ancestor carrying one.
+
+    The walk upwards is what makes the field correct rather than merely absent on a
+    directory-level SBOM: the directory has no remote of its own, but the repository it lives
+    in does, and that is the VCS location of its contents. The NEAREST carrier wins, because a
+    sub-repo's own remote describes it better than its estate's does.
+
+    A blank attribute is not an answer, so the walk continues past it. Stopping there would
+    publish an empty url and, worse, suppress a real remote one level further up.
+
+    Nothing is emitted when no ancestor carries a usable repo_url. An invented URL is worse
+    than a missing one, because a consumer cannot tell it from a real one.
+
+    Call this only for components describing INTERNAL model elements. Were it run against a
+    3rd-party component in the External subtree, the walk would climb out to the estate root
+    and attribute that package to the analyzed organisation's own repository.
+    """
+    ancestor = elem
+    while ancestor is not None:
+        repo_url = ancestor.attrs.get('repo_url', '').strip()
+        if repo_url:
+            component.setdefault('externalReferences', []).append({'url': repo_url, 'type': 'vcs'})
+            return
+        ancestor = ancestor.parent
+
+
 class SBOM:
 
     BASIC_INFO = {
@@ -1081,6 +1108,7 @@ def _sbom_for_content_element(orig_elem, ctx, transitive):
         'externalReferences': []
     }
     _add_element_location(sbom.metadata_component, orig_elem)
+    _add_vcs_reference(sbom.metadata_component, orig_elem)
 
     if transitive:
         sbom.components, dependencies = _transitive_components_and_dependencies(
