@@ -245,37 +245,61 @@ model elements, and already carry `sourceCodeReferences`.
 
 ### Tests
 
-TDD order: characterization tests pinning current output first, then the feature.
+TDD order: characterization tests pinning current output first, then the feature. All 19 live in
+one `# --- Element location tests ---` section of
+`tests/converters/sbom_cyclonedx_generator_test.py`, using the `find_property` helper already in
+that module. Names below are the shipped ones.
 
-Against `modelfile_for_sbom_multi_tests.xml` (paths `/OrgName/GroupA/repoA`, `/OrgName/GroupA/repoB`),
-using the `find_property` helper already in the test module:
+Characterization — pin what must NOT change:
+
+| Test | Asserts |
+|---|---|
+| `test_purl_and_version_stay_empty_on_the_metadata_component` | both still `''` — guards against a later "fill the empty field" edit |
+| `test_bom_ref_stays_the_slug_not_the_path` | still `repoa`/`repob`, not the path |
+| `test_serial_numbers_stay_derived_from_the_element_path` | `serialNumber == deterministic_serial(element_path)` |
+
+Location, against `modelfile_for_sbom_multi_tests.xml` (`/OrgName/GroupA/repoA`, `.../repoB`):
 
 | Test | Asserts |
 |---|---|
 | `test_metadata_component_carries_element_path` | property equals `/OrgName/GroupA/repoA` |
-| `test_metadata_component_carries_parent_group` | `group` equals `/OrgName/GroupA` |
-| `test_element_path_matches_serial_number` | `deterministic_serial(path) == serialNumber`, for every SBOM |
-| `test_element_path_at_level_2` | at `--level 2` the group is `/OrgName`, proving the fields are level-agnostic |
+| `test_metadata_component_carries_the_parent_path_as_group` | `group` equals `/OrgName/GroupA` |
+| `test_element_path_matches_the_serial_number_for_every_sbom` | `deterministic_serial(path) == serialNumber`, for every SBOM |
+| `test_element_location_is_level_agnostic` | at `--level 2` the group is `/OrgName` |
 | `test_group_is_absent_at_the_top_level` | at `--level 1` no `group` key is emitted |
-| `test_purl_stays_empty` | `purl` is still `''` — guards against a later "fill the empty field" edit |
-| `test_bom_ref_unchanged` | still the slug, not the path |
-| `test_transitive_internal_component_carries_its_location` | the inlined `repoB` component carries `group` and `elementPath` |
-| `test_vcs_reference_from_the_elements_own_repo_url` | `repoA`'s SBOM carries its `repo_url` as a vcs reference |
-| `test_vcs_reference_inherited_from_the_nearest_ancestor` | a dir-level `--element-path` SBOM inherits the repo's URL |
-| `test_no_vcs_reference_when_no_ancestor_has_one` | absent, not fabricated |
-| `test_nearest_repo_url_wins_over_a_more_distant_ancestor` | the nearest carrier wins — the only test that can tell nearest from farthest |
-| `test_a_blank_repo_url_does_not_mask_a_real_one_further_up` | a blank value is walked past, not published |
+| `test_selected_element_sbom_also_carries_its_location` | `--element-path` gets the same fields, since it shares the helper |
 | `test_legacy_single_sbom_carries_the_element_path` | `analyze_component_section` publishes the path and omits `group` |
 
-`repo_url` is added to `repoA` in the existing multi fixture. This is safe: the one existing test
-asserting on those `externalReferences` filters `type == 'bom'` first.
-
-A new fixture `modelfile_for_sbom_mirrored_tests.xml` carries one repository name under two
-groups — the case the feature exists to disambiguate, which no current fixture covers:
+Repository URL:
 
 | Test | Asserts |
 |---|---|
-| `test_mirrored_repositories_are_distinguished_by_location` | same `name`, distinct `group`, `elementPath` and `serialNumber` |
+| `test_vcs_reference_comes_from_the_elements_own_repo_url` | `repoA`'s SBOM carries its `repo_url` as a vcs reference |
+| `test_vcs_reference_is_inherited_from_the_nearest_ancestor` | a dir-level `--element-path` SBOM inherits the repo's URL |
+| `test_no_vcs_reference_when_no_ancestor_has_one` | absent, not fabricated |
+| `test_nearest_repo_url_wins_over_a_more_distant_ancestor` | the nearest carrier wins — the only test that can tell nearest from farthest |
+| `test_a_blank_repo_url_does_not_mask_a_real_one_further_up` | a blank value is walked past, not published |
+
+Transitive mode:
+
+| Test | Asserts |
+|---|---|
+| `test_transitive_internal_components_carry_their_location` | the inlined `repoB` component carries `group` and `elementPath`, and keeps `softagram:internal` |
+| `test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location` | a component and its host share a name; location and the vcs URL separate them |
+
+`repo_url` is added to `repoA` in the existing multi fixture. This is safe: the one existing test
+asserting on those `externalReferences` filters `type == 'bom'` first. `repoB` deliberately keeps
+none, so it can serve as the absence case.
+
+A new fixture `modelfile_for_sbom_mirrored_tests.xml` carries one repository name under two
+groups — the case the feature exists to disambiguate, which no existing fixture covers. `GroupA`
+also carries a `repo_url` of its own, which is what makes the nearest-wins rule testable: it is
+the only ancestor chain in the suite with two carriers on it.
+
+| Test | Asserts |
+|---|---|
+| `test_mirrored_repositories_are_distinguished_by_their_location` | same `name`, distinct `group`, `elementPath` and `serialNumber` |
+| `test_mirrored_repositories_carry_their_own_distinct_repository_urls` | each mirror publishes its own remote, not its neighbour's |
 
 ### Verification against a real model
 

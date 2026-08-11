@@ -240,6 +240,69 @@ converter.convert('model.xml', 'graph.graphml')
 # - Cytoscape: File > Import > Network from File
 ```
 
+## CycloneDX SBOM Format
+
+`sgraph.converters.sbom_cyclonedx_generator` emits CycloneDX 1.7 documents. It can produce a
+single SBOM for the whole model, one SBOM per element at a chosen tree depth (`--level`), or one
+for a named element (`--element-path`).
+
+```bash
+# One SBOM per repository, for a model whose repositories sit at depth 3
+python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json --level 3
+```
+
+### Where an element lives
+
+Every component that describes a **model element** — the metadata component of each document,
+and the internal components inlined by `--transitive` — publishes its position in the model:
+
+```json
+{ "bom-ref": "repoa",
+  "name": "repoA",
+  "group": "/OrgName/GroupA",
+  "type": "application",
+  "version": "",
+  "purl": "",
+  "externalReferences": [
+    { "url": "https://example.org/org/repoA.git", "type": "vcs" }
+  ],
+  "properties": [
+    { "name": "softagram:elementPath", "value": "/OrgName/GroupA/repoA" }
+  ] }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `group` | The **full path of the parent element**, not just its name. Omitted for a top-level element, which has no parent path. |
+| `properties[softagram:elementPath]` | The element's own full path. A property rather than a field because the CycloneDX component schema sets `additionalProperties: false`. |
+| `externalReferences[type=vcs]` | The `repo_url` of the element, or of the **nearest ancestor** carrying a non-blank one. Absent when no ancestor has one — never a placeholder. |
+
+Components describing **3rd-party packages** carry none of these. Their identity is the `purl`.
+
+### Guarantees
+
+- `deterministic_serial(elementPath) == serialNumber`. The published path is the exact string the
+  serial is derived from, so a consumer can verify a document's identity without the model.
+- `group + '/' + name == elementPath` below the top level.
+- Two repositories that share a name under different groups are distinguished by `group` and
+  `elementPath`. They are *not* reliably distinguished by `bom-ref`, whose collision suffix
+  (`repoa`, `repoa-2`) depends on traversal order and can change between model generations.
+
+### Caveats
+
+- **The first path segment is the estate root and is not stable.** It changes when the estate is
+  renamed or restructured. Read it from the path rather than hardcoding it.
+- **`group` holds a path, not a package namespace.** The CycloneDX specification suggests
+  avoiding special characters in `group` and shows package coordinates such as
+  `org.apache.commons`. A model group is a tree location, and the slash-delimited path is what
+  makes two identically named groups distinguishable, so this converter prefers precision over
+  that convention. Tools that render `group` as a package coordinate will show the path.
+- **`purl` and `version` are empty** on components describing model elements. A repository has no
+  package identity and no version; a path is not a valid purl and is deliberately not placed
+  there.
+- The vcs reference is inherited by proximity. A repository with no remote of its own, under a
+  group that has one, reports the group's URL.
+
 ## Format Comparison
 
 ### Performance Benchmarks

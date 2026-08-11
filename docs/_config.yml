@@ -42,6 +42,10 @@ exclude:
   - vendor/cache/
   - vendor/gems/
   - vendor/ruby/
+  # Internal design documents. They belong in the repository for contributors, but they are
+  # not user documentation and must not be published to the site. Anything user-facing that
+  # comes out of them belongs in a real page such as data-formats.md.
+  - superpowers/
 
 # Social links
 author:

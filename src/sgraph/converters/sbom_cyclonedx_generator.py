@@ -603,6 +603,13 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         }
       ]
 
+    These components describe 3rd-party packages, not model elements, so they deliberately get
+    neither the 'group'/'softagram:elementPath' pair nor a vcs reference from
+    _add_element_location / _add_vcs_reference. Their identity is the purl; their position in
+    the External subtree is an artefact of how the analyzer records dependencies, not a location
+    a consumer should navigate by. Locating them would also misattribute them: the ancestor walk
+    for a repo_url would climb out of External to the analyzed organisation's own repository.
+
     :param elem: element
     :param other_externals_by_name: dict of external elements by name
     :param external_root:
@@ -809,6 +816,13 @@ def _add_vcs_reference(component, elem):
     Call this only for components describing INTERNAL model elements. Were it run against a
     3rd-party component in the External subtree, the walk would climb out to the estate root
     and attribute that package to the analyzed organisation's own repository.
+
+    The walk deliberately reaches past the repository, up to the group and the estate root: it
+    has no reliable way to recognise a repository boundary, since repo elements are not required
+    to carry a 'type' attribute. The consequence is worth knowing. A repository that genuinely
+    has no remote, sitting under a group that does, reports the GROUP's url as its own. The
+    convention places repo_url on repo elements (docs/graph-conventions.md), which keeps this
+    rare, but it is inheritance by proximity, not proof of ownership.
     """
     ancestor = elem
     while ancestor is not None:
@@ -892,10 +906,12 @@ def analyze_component_section(elem, sbom):
                     'url': f'https://UNKNOWN-REPOSITORY_LOCATION/{repo.name}',
                     'type': 'vcs'
                 })
-    # Location only: this path builds its own vcs references from the element's children just
-    # above, including a fabricated placeholder when a child has no repo_url. That placeholder
-    # is a defect, but removing it changes output for existing consumers and is a separate
-    # decision — so this change neither adopts _add_vcs_reference here nor touches it.
+    # Location only, deliberately: this path builds its own vcs references just above, from the
+    # element's typed CHILDREN rather than its ancestors, and fabricates a placeholder url for a
+    # typed child that has no repo_url. That placeholder is a defect, but removing it changes
+    # output for existing consumers and is a separate decision, so _add_vcs_reference is neither
+    # adopted here nor allowed to touch it. Note the cardinality differs as a result: this path
+    # can emit one vcs reference per child, where _add_vcs_reference emits at most one.
     _add_element_location(c, elem)
     sbom.metadata_component = c
 
