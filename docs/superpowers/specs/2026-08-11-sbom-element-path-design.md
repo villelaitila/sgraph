@@ -123,8 +123,10 @@ the existing ones is a separate, breaking decision.
 3. Two SBOMs for one mirrored repository share `name`, carry **distinct** `bom-ref`s (via the
    traversal-order collision suffix) and distinct `serialNumber`s, and are told apart
    unambiguously by `group` and `elementPath`.
-4. A vcs reference is present exactly when the element or one of its ancestors carries
-   `repo_url`. No fabricated URL is ever emitted on the new code paths.
+4. A vcs reference is present exactly when the element or one of its ancestors carries a
+   **non-blank** `repo_url`, and carries the value of the **nearest** such ancestor. A blank
+   attribute is walked past rather than published: stopping on it would emit an empty url and
+   suppress a real remote further up. No fabricated URL is ever emitted on the new code paths.
 
 ### A caveat for consumers
 
@@ -192,17 +194,28 @@ def _add_element_location(component, elem):
 def _add_vcs_reference(component, elem):
     """Publish the repository URL of elem, or of the nearest ancestor carrying one.
 
-    A directory-level SBOM belongs to its repository's VCS, so the walk upwards is what makes
-    the field correct there rather than merely absent. Nothing is emitted when no ancestor has
-    a repo_url: an invented URL is worse than a missing one, because a consumer cannot tell it
-    from a real one.
+    The walk upwards is what makes the field correct rather than merely absent on a
+    directory-level SBOM: the directory has no remote of its own, but the repository it lives
+    in does, and that is the VCS location of its contents. The NEAREST carrier wins, because a
+    sub-repo's own remote describes it better than its estate's does.
+
+    A blank attribute is not an answer, so the walk continues past it. Stopping there would
+    publish an empty url and, worse, suppress a real remote one level further up.
+
+    Nothing is emitted when no ancestor carries a usable repo_url. An invented URL is worse
+    than a missing one, because a consumer cannot tell it from a real one.
+
+    Call this only for components describing INTERNAL model elements. Were it run against a
+    3rd-party component in the External subtree, the walk would climb out to the estate root
+    and attribute that package to the analyzed organisation's own repository.
     """
-    while elem is not None:
-        if 'repo_url' in elem.attrs:
-            component.setdefault('externalReferences', []).append(
-                {'url': elem.attrs['repo_url'], 'type': 'vcs'})
+    ancestor = elem
+    while ancestor is not None:
+        repo_url = ancestor.attrs.get('repo_url', '').strip()
+        if repo_url:
+            component.setdefault('externalReferences', []).append({'url': repo_url, 'type': 'vcs'})
             return
-        elem = elem.parent
+        ancestor = ancestor.parent
 ```
 
 `getPath()` returns `''` for the model root, which is a level-1 element's parent, so
@@ -250,6 +263,8 @@ using the `find_property` helper already in the test module:
 | `test_vcs_reference_from_the_elements_own_repo_url` | `repoA`'s SBOM carries its `repo_url` as a vcs reference |
 | `test_vcs_reference_inherited_from_the_nearest_ancestor` | a dir-level `--element-path` SBOM inherits the repo's URL |
 | `test_no_vcs_reference_when_no_ancestor_has_one` | absent, not fabricated |
+| `test_nearest_repo_url_wins_over_a_more_distant_ancestor` | the nearest carrier wins — the only test that can tell nearest from farthest |
+| `test_a_blank_repo_url_does_not_mask_a_real_one_further_up` | a blank value is walked past, not published |
 | `test_legacy_single_sbom_carries_the_element_path` | `analyze_component_section` publishes the path and omits `group` |
 
 `repo_url` is added to `repoA` in the existing multi fixture. This is safe: the one existing test
