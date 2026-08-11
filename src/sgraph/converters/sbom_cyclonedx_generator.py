@@ -603,6 +603,13 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         }
       ]
 
+    These components describe 3rd-party packages, not model elements, so they deliberately get
+    neither the 'group'/'softagram:elementPath' pair nor a vcs reference from
+    _add_element_location / _add_vcs_reference. Their identity is the purl; their position in
+    the External subtree is an artefact of how the analyzer records dependencies, not a location
+    a consumer should navigate by. Locating them would also misattribute them: the ancestor walk
+    for a repo_url would climb out of External to the analyzed organisation's own repository.
+
     :param elem: element
     :param other_externals_by_name: dict of external elements by name
     :param external_root:
@@ -762,6 +769,70 @@ def analyze_3rdparty(external_root, sbom):
         stack += elem.children
 
 
+ELEMENT_PATH_PROPERTY = 'softagram:elementPath'
+
+
+def _add_element_location(component, elem):
+    """Publish where elem sits in the model, on a component that describes elem.
+
+    'group' carries the parent's full path rather than its bare name so that two identically
+    named groups under different roots stay distinguishable, and is omitted for a top-level
+    element, whose parent is the model root and has no path of its own.
+
+    The element's own path goes into a property because CycloneDX sets additionalProperties:
+    false on component, leaving properties[] as the only schema-valid place for it. It is also
+    the exact string deterministic_serial() hashes, so publishing it verbatim lets a consumer
+    verify the document's identity without loading the model.
+
+    Call once per component: this overwrites 'group' and appends to 'properties'. elem must be
+    attached to a model. A detached element is not merely unsupported here, it is dangerous:
+    getPath() would return a bare name with no leading slash, and publishing that as an
+    elementPath yields a document a consumer cannot resolve and cannot detect as broken.
+    Raising at the call site is the better failure.
+    """
+    parent_path = elem.parent.getPath()
+    if parent_path:
+        component['group'] = parent_path
+    component.setdefault('properties', []).append({
+        'name': ELEMENT_PATH_PROPERTY,
+        'value': elem.getPath()
+    })
+
+
+def _add_vcs_reference(component, elem):
+    """Publish the repository URL of elem, or of the nearest ancestor carrying one.
+
+    The walk upwards is what makes the field correct rather than merely absent on a
+    directory-level SBOM: the directory has no remote of its own, but the repository it lives
+    in does, and that is the VCS location of its contents. The NEAREST carrier wins, because a
+    sub-repo's own remote describes it better than its estate's does.
+
+    A blank attribute is not an answer, so the walk continues past it. Stopping there would
+    publish an empty url and, worse, suppress a real remote one level further up.
+
+    Nothing is emitted when no ancestor carries a usable repo_url. An invented URL is worse
+    than a missing one, because a consumer cannot tell it from a real one.
+
+    Call this only for components describing INTERNAL model elements. Were it run against a
+    3rd-party component in the External subtree, the walk would climb out to the estate root
+    and attribute that package to the analyzed organisation's own repository.
+
+    The walk deliberately reaches past the repository, up to the group and the estate root: it
+    has no reliable way to recognise a repository boundary, since repo elements are not required
+    to carry a 'type' attribute. The consequence is worth knowing. A repository that genuinely
+    has no remote, sitting under a group that does, reports the GROUP's url as its own. The
+    convention places repo_url on repo elements (docs/graph-conventions.md), which keeps this
+    rare, but it is inheritance by proximity, not proof of ownership.
+    """
+    ancestor = elem
+    while ancestor is not None:
+        repo_url = ancestor.attrs.get('repo_url', '').strip()
+        if repo_url:
+            component.setdefault('externalReferences', []).append({'url': repo_url, 'type': 'vcs'})
+            return
+        ancestor = ancestor.parent
+
+
 class SBOM:
 
     BASIC_INFO = {
@@ -835,6 +906,13 @@ def analyze_component_section(elem, sbom):
                     'url': f'https://UNKNOWN-REPOSITORY_LOCATION/{repo.name}',
                     'type': 'vcs'
                 })
+    # Location only, deliberately: this path builds its own vcs references just above, from the
+    # element's typed CHILDREN rather than its ancestors, and fabricates a placeholder url for a
+    # typed child that has no repo_url. That placeholder is a defect, but removing it changes
+    # output for existing consumers and is a separate decision, so _add_vcs_reference is neither
+    # adopted here nor allowed to touch it. Note the cardinality differs as a result: this path
+    # can emit one vcs reference per child, where _add_vcs_reference emits at most one.
+    _add_element_location(c, elem)
     sbom.metadata_component = c
 
 
@@ -933,18 +1011,25 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
             refs.append(surviving_ref_by_key[key])
         external_refs_of[path] = refs
 
-    # Reachable internal elements become components of this BOM
+    # Reachable internal elements become components of this BOM. They describe model elements,
+    # so they publish their location and repository too: a consumer of one transitive BOM can
+    # then place every link of the exposure chain in the tree, not only the element the BOM is
+    # rooted at.
     for path in order[1:]:
         serial_uuid = elem_serials[path].replace('urn:uuid:', '')
-        components.append({
+        internal_elem = orig_elem_by_path[path]
+        internal_component = {
             'bom-ref': elem_bom_refs[path],
             'type': 'library',
-            'name': orig_elem_by_path[path].name,
+            'name': internal_elem.name,
             'version': '',
             'purl': '',
             'properties': [{'name': 'softagram:internal', 'value': 'true'}],
             'externalReferences': [{'url': f'urn:cdx:{serial_uuid}/1', 'type': 'bom'}],
-        })
+        }
+        _add_element_location(internal_component, internal_elem)
+        _add_vcs_reference(internal_component, internal_elem)
+        components.append(internal_component)
 
     # Multi-entry dependency graph: every ref resolves within this BOM
     dependencies = []
@@ -1050,6 +1135,8 @@ def _sbom_for_content_element(orig_elem, ctx, transitive):
         'purl': '',
         'externalReferences': []
     }
+    _add_element_location(sbom.metadata_component, orig_elem)
+    _add_vcs_reference(sbom.metadata_component, orig_elem)
 
     if transitive:
         sbom.components, dependencies = _transitive_components_and_dependencies(

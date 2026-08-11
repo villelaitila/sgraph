@@ -439,6 +439,280 @@ def test_cli_rejects_transitive_without_level(tmp_path):
     assert '--transitive requires --level' in proc.stderr
 
 
+# --- Element location tests ---
+#
+# The model position of an element is published two ways: the native CycloneDX 'group' field
+# (the parent's full path) and a 'softagram:elementPath' property (the element's own path).
+# The property is the exact string deterministic_serial() hashes, so it is verifiable.
+
+
+def test_purl_and_version_stay_empty_on_the_metadata_component():
+    """Characterization: the metadata component has no package identity, and must not gain one.
+
+    Guards against a later 'fill the empty field' edit putting the element path into purl, where
+    it would violate the purl grammar and be rejected by a purl-parsing consumer.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert len(result) == 2
+    for sbom in result:
+        assert sbom['metadata']['component']['purl'] == ''
+        assert sbom['metadata']['component']['version'] == ''
+
+
+def test_bom_ref_stays_the_slug_not_the_path():
+    """Characterization: bom-ref is referenced from other SBOMs and must not become the path."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    refs = sorted(sbom['metadata']['component']['bom-ref'] for sbom in result)
+    assert refs == ['repoa', 'repob']
+
+
+def test_serial_numbers_stay_derived_from_the_element_path():
+    """Characterization: serialNumber == deterministic_serial(element_path), and stays that way.
+
+    Re-ingesting a model must update the same projects rather than create new ones.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    serials = {sbom['metadata']['component']['name']: sbom['serialNumber'] for sbom in result}
+    assert serials['repoA'] == deterministic_serial('/OrgName/GroupA/repoA')
+    assert serials['repoB'] == deterministic_serial('/OrgName/GroupA/repoB')
+
+
+def test_metadata_component_carries_element_path():
+    """The full model path is published as a property, because CycloneDX has no field for it."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoA')['metadata']['component']
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA'
+
+
+def test_metadata_component_carries_the_parent_path_as_group():
+    """group holds the parent's full path, so two same-named groups stay distinguishable."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert sbom_of(result, 'repoA')['metadata']['component']['group'] == '/OrgName/GroupA'
+    assert sbom_of(result, 'repoB')['metadata']['component']['group'] == '/OrgName/GroupA'
+
+
+def test_element_path_matches_the_serial_number_for_every_sbom():
+    """The published path must be the same string the serial was derived from.
+
+    This is the invariant that makes the property verifiable rather than decorative: it catches a
+    future refactor that derives one from a normalised path and the other from the raw one.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    assert len(result) == 2
+    for sbom in result:
+        path = find_property(sbom['metadata']['component'], 'softagram:elementPath')
+        assert deterministic_serial(path) == sbom['serialNumber']
+
+
+def test_element_location_is_level_agnostic():
+    """At level 2 the element is the group itself, and its parent is the estate root."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=2)
+
+    component = sbom_of(result, 'GroupA')['metadata']['component']
+    assert component['group'] == '/OrgName'
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA'
+
+
+def test_group_is_absent_at_the_top_level():
+    """A top-level element has no parent to name, so the key is omitted rather than emitted empty.
+
+    An empty group cannot be told apart from 'the tool forgot to fill it in'; an absent one can.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=1)
+
+    component = sbom_of(result, 'OrgName')['metadata']['component']
+    assert 'group' not in component
+    assert find_property(component, 'softagram:elementPath') == '/OrgName'
+
+
+def test_selected_element_sbom_also_carries_its_location():
+    """--element-path routes through the same helper as --level, so it gets the same fields."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src')
+
+    component = sbom['metadata']['component']
+    assert component['group'] == '/OrgName/GroupA/repoA'
+    assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA/src'
+
+
+MIRRORED_MODEL = 'converters/modelfile_for_sbom_mirrored_tests.xml'
+
+
+def test_mirrored_repositories_are_distinguished_by_their_location():
+    """One repository name under two groups: the only field that tells them apart is the path.
+
+    'name' is identical. 'bom-ref' differs only through a traversal-order collision suffix, so it
+    is not a stable identity: drop GroupA's copy and GroupB's silently becomes 'shared'.
+    'serialNumber' differs but is an opaque hash. group and elementPath are the answer.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    components = [sbom['metadata']['component'] for sbom in result]
+    assert [c['name'] for c in components] == ['shared', 'shared']
+
+    by_group = {c['group']: c for c in components}
+    assert sorted(by_group) == ['/OrgName/GroupA', '/OrgName/GroupB']
+
+    assert find_property(by_group['/OrgName/GroupA'], 'softagram:elementPath') \
+        == '/OrgName/GroupA/shared'
+    assert find_property(by_group['/OrgName/GroupB'], 'softagram:elementPath') \
+        == '/OrgName/GroupB/shared'
+
+    # The collision suffix keeps bom-refs unique within the set, but does not identify either one
+    assert sorted(c['bom-ref'] for c in components) == ['shared', 'shared-2']
+
+    # Mirror-specific: a serial derived from the NAME rather than the path would collide here,
+    # where the names are identical. The generic path/serial invariant is pinned elsewhere.
+    assert len({sbom['serialNumber'] for sbom in result}) == 2
+
+
+def test_vcs_reference_comes_from_the_elements_own_repo_url():
+    """The model already holds the repository URL; CycloneDX has a proper field for it."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoA')['metadata']['component']
+    vcs = [r['url'] for r in component['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/repoA.git']
+
+
+def test_vcs_reference_is_inherited_from_the_nearest_ancestor():
+    """A directory-level SBOM belongs to its repository's VCS, one level up."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src')
+
+    vcs = [r['url'] for r in sbom['metadata']['component']['externalReferences']
+           if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/repoA.git']
+
+
+def test_no_vcs_reference_when_no_ancestor_has_one():
+    """Absent, never invented: a consumer cannot tell a fabricated URL from a real one."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = sbom_of(result, 'repoB')['metadata']['component']
+    assert [r for r in component['externalReferences'] if r['type'] == 'vcs'] == []
+
+
+def test_mirrored_repositories_carry_their_own_distinct_repository_urls():
+    """Two mirrors of one name are two different repositories, each with its own remote."""
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    by_group = {sbom['metadata']['component']['group']: sbom['metadata']['component']
+                for sbom in result}
+    assert [r['url'] for r in by_group['/OrgName/GroupA']['externalReferences']
+            if r['type'] == 'vcs'] == ['https://example.org/org/groupa-shared.git']
+    assert [r['url'] for r in by_group['/OrgName/GroupB']['externalReferences']
+            if r['type'] == 'vcs'] == ['https://example.org/org/groupb-shared.git']
+
+
+def test_nearest_repo_url_wins_over_a_more_distant_ancestor():
+    """A sub-repo's own remote describes it; its parent group's does not.
+
+    Without this, a farthest-ancestor-wins regression passes the whole suite: no other fixture
+    has two repo_url attributes on one chain, so nothing else can tell the two rules apart.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    component = next(s['metadata']['component'] for s in result
+                     if s['metadata']['component']['group'] == '/OrgName/GroupA')
+    vcs = [r['url'] for r in component['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/groupa-shared.git']
+
+
+def test_a_blank_repo_url_does_not_mask_a_real_one_further_up():
+    """A blank attribute is not an answer. Publishing it would also hide a recoverable URL."""
+    model = SGraph(SElement(None, ''))
+    model.createOrGetElementFromPath('/Org/repo/sub')
+    model.findElementFromPath('/Org/repo').attrs['repo_url'] = 'https://example.org/repo.git'
+    model.findElementFromPath('/Org/repo/sub').attrs['repo_url'] = '   '
+
+    component = {}
+    sbom_cyclonedx_generator._add_vcs_reference(
+        component, model.findElementFromPath('/Org/repo/sub'))
+
+    assert component['externalReferences'] == [
+        {'url': 'https://example.org/repo.git', 'type': 'vcs'}
+    ]
+
+
+def test_transitive_internal_components_carry_their_location():
+    """Every link of the inlined exposure chain says where it lives, not just the chain's root."""
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    repo_b = next(c for c in sbom_of(result, 'repoA')['components'] if c['name'] == 'repoB')
+    assert repo_b['group'] == '/OrgName/GroupA'
+    assert find_property(repo_b, 'softagram:elementPath') == '/OrgName/GroupA/repoB'
+    # The pre-existing internal marker survives alongside the new property
+    assert find_property(repo_b, 'softagram:internal') == 'true'
+    # repoB has no repo_url in the fixture, so it gets no vcs reference
+    assert [r for r in repo_b['externalReferences'] if r['type'] == 'vcs'] == []
+
+
+def test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location():
+    """GroupA's transitive SBOM holds two components named 'shared' — one of them is itself.
+
+    The two share a name, so a consumer reading names alone cannot tell which repository each
+    component is. group, elementPath and the vcs URL answer that; the bom link then resolves
+    the inlined one to its own standalone document. This is the case the feature exists for.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    host = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupA')
+    inlined = next(c for c in host['components']
+                   if find_property(c, 'softagram:internal') == 'true')
+
+    assert inlined['name'] == host['metadata']['component']['name'] == 'shared'
+    assert inlined['group'] == '/OrgName/GroupB'
+    assert find_property(inlined, 'softagram:elementPath') == '/OrgName/GroupB/shared'
+
+    # List comprehensions rather than a {type: url} dict: these pin cardinality too, so a
+    # regression emitting a second vcs entry cannot pass by last-wins.
+    vcs = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'vcs']
+    assert vcs == ['https://example.org/org/groupb-shared.git']
+
+    mirror = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupB')
+    mirror_serial = mirror['serialNumber'].replace('urn:uuid:', '')
+    bom_links = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'bom']
+    assert bom_links == [f'urn:cdx:{mirror_serial}/1']
+
+
+def test_legacy_single_sbom_carries_the_element_path():
+    """The legacy single-SBOM mode describes a model element too, so it publishes its path.
+
+    Its element is at the top level, so group is omitted. Its bom-ref has always been the path;
+    that is left alone, because other documents may already reference it.
+    """
+    model, _ = get_model_and_model_api('converters/modelfile_for_sbom_tests.xml')
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    component = sbom['metadata']['component']
+    assert component['name'] == 'nginx'
+    assert find_property(component, 'softagram:elementPath') == '/nginx'
+    assert 'group' not in component
+    assert component['bom-ref'] == '/nginx'
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
