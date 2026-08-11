@@ -549,6 +549,38 @@ def test_selected_element_sbom_also_carries_its_location():
     assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA/src'
 
 
+MIRRORED_MODEL = 'converters/modelfile_for_sbom_mirrored_tests.xml'
+
+
+def test_mirrored_repositories_are_distinguished_by_their_location():
+    """One repository name under two groups: the only field that tells them apart is the path.
+
+    'name' is identical. 'bom-ref' differs only through a traversal-order collision suffix, so it
+    is not a stable identity: drop GroupA's copy and GroupB's silently becomes 'shared'.
+    'serialNumber' differs but is an opaque hash. group and elementPath are the answer.
+    """
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    components = [sbom['metadata']['component'] for sbom in result]
+    assert [c['name'] for c in components] == ['shared', 'shared']
+
+    by_group = {c['group']: c for c in components}
+    assert sorted(by_group) == ['/OrgName/GroupA', '/OrgName/GroupB']
+
+    assert find_property(by_group['/OrgName/GroupA'], 'softagram:elementPath') \
+        == '/OrgName/GroupA/shared'
+    assert find_property(by_group['/OrgName/GroupB'], 'softagram:elementPath') \
+        == '/OrgName/GroupB/shared'
+
+    # The collision suffix keeps bom-refs unique within the set, but does not identify either one
+    assert sorted(c['bom-ref'] for c in components) == ['shared', 'shared-2']
+
+    # Mirror-specific: a serial derived from the NAME rather than the path would collide here,
+    # where the names are identical. The generic path/serial invariant is pinned elsewhere.
+    assert len({sbom['serialNumber'] for sbom in result}) == 2
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'
