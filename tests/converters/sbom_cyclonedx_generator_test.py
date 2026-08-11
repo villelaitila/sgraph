@@ -697,6 +697,22 @@ def test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location():
     assert bom_links == [f'urn:cdx:{mirror_serial}/1']
 
 
+def test_legacy_single_sbom_carries_the_element_path():
+    """The legacy single-SBOM mode describes a model element too, so it publishes its path.
+
+    Its element is at the top level, so group is omitted. Its bom-ref has always been the path;
+    that is left alone, because other documents may already reference it.
+    """
+    model, _ = get_model_and_model_api('converters/modelfile_for_sbom_tests.xml')
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    component = sbom['metadata']['component']
+    assert component['name'] == 'nginx'
+    assert find_property(component, 'softagram:elementPath') == '/nginx'
+    assert 'group' not in component
+    assert component['bom-ref'] == '/nginx'
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'

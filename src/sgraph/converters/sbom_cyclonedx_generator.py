@@ -892,6 +892,11 @@ def analyze_component_section(elem, sbom):
                     'url': f'https://UNKNOWN-REPOSITORY_LOCATION/{repo.name}',
                     'type': 'vcs'
                 })
+    # Location only: this path builds its own vcs references from the element's children just
+    # above, including a fabricated placeholder when a child has no repo_url. That placeholder
+    # is a defect, but removing it changes output for existing consumers and is a separate
+    # decision — so this change neither adopts _add_vcs_reference here nor touches it.
+    _add_element_location(c, elem)
     sbom.metadata_component = c
 
 
