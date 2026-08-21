@@ -438,6 +438,12 @@ Components describing **3rd-party packages** carry none of these. Their identity
 
 ### Guarantees
 
+- **Every `properties[].value` is a JSON string**, including the ones that carry a number.
+  CycloneDX types the field as a string in every spec version this converter emits, and sets
+  `additionalProperties: false`, so a numeric value is not merely untidy: a validating consumer
+  rejects the whole document rather than the one field. Counts such as `indirectExposureCount`
+  are therefore published as `"3"`, not `3`, and a consumer reading them numerically has to
+  parse them — the same as for `dependencyDepth`.
 - `deterministic_serial(elementPath) == serialNumber`. The published path is the exact string the
   serial is derived from, so a consumer can verify a document's identity without the model.
 - `group + '/' + name == elementPath` below the top level.
