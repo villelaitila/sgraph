@@ -21,16 +21,19 @@ PHASE 2 - Complete release (after PR is merged):
     python scripts/release.py --complete 1.2.5
 
     This will:
-    1. Sync main branch with upstream
-    2. Create and push git tag
-    3. Build distribution packages
-    4. Upload to PyPI (requires twine)
-    5. Create GitHub release (requires gh CLI)
+    1. Validate release tooling (setuptools, wheel, twine) before anything
+       irreversible happens
+    2. Sync main branch with upstream
+    3. Create and push git tag
+    4. Build distribution packages
+    5. Upload to PyPI (requires twine)
+    6. Create GitHub release (requires gh CLI)
 """
 
 import argparse
 import configparser
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -116,6 +119,42 @@ class ReleaseAutomation:
         else:
             print(f"[DRY RUN] Would update version in setup.cfg to {new_version}")
 
+    def _module_available(self, module: str) -> bool:
+        """Check whether a module is importable by the interpreter that will run it.
+
+        A PATH lookup is not good enough here: the build and upload steps run as
+        `sys.executable -m <module>`, so a `twine` sitting in some other Python
+        installation would satisfy PATH while the actual call still fails.
+        """
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def validate_release_tooling(self) -> None:
+        """Verify phase 2 can finish before it does anything irreversible.
+
+        Phase 2 pushes the git tag before it builds, so a missing build tool
+        would otherwise leave a published tag with no artifacts behind it.
+        """
+        print("\n=== Validating release tooling ===")
+
+        missing = [m for m in ("setuptools", "wheel", "twine")
+                   if not self._module_available(m)]
+        if missing:
+            raise ReleaseError(
+                f"{sys.executable} cannot import: {', '.join(missing)}.\n"
+                f"Install them into this environment first:\n"
+                f"  uv pip install {' '.join(missing)}"
+            )
+
+        if shutil.which("gh") is None:
+            print("WARNING: 'gh' CLI not found. The GitHub release must be created manually.")
+
+        print("Release tooling OK")
+
     def validate_preconditions(self) -> None:
         """Validate that we're ready to release."""
         print("\n=== Validating preconditions ===")
@@ -141,13 +180,11 @@ class ReleaseAutomation:
             )
 
         # Check if gh CLI is available
-        result = subprocess.run(["which", "gh"], capture_output=True, check=False)
-        if result.returncode != 0:
+        if shutil.which("gh") is None:
             print("WARNING: 'gh' CLI not found. PR and release creation will need to be done manually.")
 
-        # Check if twine is available
-        result = subprocess.run(["which", "twine"], capture_output=True, check=False)
-        if result.returncode != 0:
+        # Check if twine is importable by the interpreter that would run it
+        if not self._module_available("twine"):
             print("WARNING: 'twine' not found. PyPI upload will need to be done manually.")
 
         print("Preconditions validated successfully")
@@ -177,8 +214,7 @@ class ReleaseAutomation:
         self.run_command(["git", "push", "-u", "origin", branch_name])
 
         # Create PR using gh CLI
-        result = subprocess.run(["which", "gh"], capture_output=True, check=False)
-        if result.returncode == 0 and not self.dry_run:
+        if shutil.which("gh") is not None and not self.dry_run:
             pr_title = f"Release {version}"
             pr_body = f"Automated release PR for version {version}"
             pr_result = self.run_command([
@@ -256,9 +292,9 @@ class ReleaseAutomation:
         """Upload to PyPI using twine."""
         print("\n=== Uploading to PyPI ===")
 
-        result = subprocess.run(["which", "twine"], capture_output=True, check=False)
-        if result.returncode != 0:
-            print("ERROR: twine not found. Please install it with: pip install twine")
+        if not self._module_available("twine"):
+            print(f"ERROR: {sys.executable} cannot import twine.")
+            print("Install it with: uv pip install twine")
             print("Then run manually: python3 -m twine upload --repository sgraph dist/* --skip-existing")
             return
 
@@ -286,8 +322,7 @@ class ReleaseAutomation:
         """Create GitHub release with auto-generated notes."""
         print("\n=== Creating GitHub release ===")
 
-        result = subprocess.run(["which", "gh"], capture_output=True, check=False)
-        if result.returncode != 0:
+        if shutil.which("gh") is None:
             print("gh CLI not found. Please create the release manually at:")
             print(f"  https://github.com/softagram/sgraph/releases/new")
             print(f"  Tag: v{version}")
@@ -372,6 +407,9 @@ class ReleaseAutomation:
         """Phase 2: Complete release after PR is merged."""
         try:
             print(f"\n=== Completing release {version} ===")
+
+            # Validate tooling before the tag is pushed
+            self.validate_release_tooling()
 
             # Sync with upstream
             self.sync_with_upstream()
