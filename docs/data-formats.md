@@ -251,10 +251,167 @@ for a named element (`--element-path`).
 python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json --level 3
 ```
 
+### The transitive dependency closure
+
+By default a document lists the 3rd-party packages the analyzed code itself declares. A package
+that only *another package* depends on — the resolved closure a lockfile records — is left out,
+even when the model holds those package-to-package edges.
+
+`--transitive-externals` follows them, so the whole closure reaches the document. It is opt-in:
+the closure multiplies component counts, and every existing consumer of the default output keeps
+receiving exactly what it received before. `--max-depth N` caps how deep the walk goes.
+
+```bash
+# Direct dependencies plus everything they pull in, no deeper than two hops
+python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json \
+    --level 3 --transitive-externals --max-depth 2
+```
+
+Both options require `--level` or `--element-path`; the single-SBOM mode does not accept them.
+`--max-depth` requires `--transitive-externals`, and must be 1 or greater: a smaller cap excludes
+every component the walk could emit, so it is refused rather than rounded up to the shallowest
+level.
+
+| Field | Meaning |
+|-------|---------|
+| `properties[dependencyDepth]` | Package hops between the component and the analyzed code: `1` for a package the code declares, `2` for one that package pulls in, and so on. When a package is reachable by several routes, the **shortest** is reported — including routes through the internal elements a `--transitive` document inlines, so the depth a component publishes always agrees with where the `dependencies` section of the same document places it. |
+
+- The property is present on **every** 3rd-party component of a `--transitive-externals`
+  document, depth 1 included, and **absent from every component** of a default one. So an absent
+  property means the document makes no depth claim — never "this package is direct".
+- Only edges that mean *package depends on package* are followed (the manifest and lockfile
+  deptypes). Code-level edges between externals are not: they describe how code is written, not
+  what a manifest declares, and following them would list packages the project never depends on.
+- A development-section declaration is followed exactly like a production one. Whether such a
+  package should be scoped differently in the document is a separate question this option does
+  not answer.
+- The option is **inert on a model that holds no package-to-package edges the converter
+  recognises**: the components are the same, only the depth property is added. What a document
+  contains depends on what the analyzers stored, not on the flag alone. The recognised deptypes
+  are the manifest and lockfile ones — `packagejson`, `packagelock`, `pip`, `package_reference`,
+  `nuget` and `pubspec`, each also in its `dev_`-prefixed form. Anything else between two
+  externals is skipped.
+- **An empty closure says so.** When a document follows no package-to-package edge at all while
+  edges between external elements were skipped for their deptype, one line naming those deptypes
+  is written to stderr. Otherwise an unrecognised deptype and a model with no closure at all
+  produce the same document, and nothing distinguishes them.
+
+#### Which repository's edges a document follows
+
+The `External` subtree is project-wide: every repository's resolved tree lands in the same
+`External/<ecosystem>` elements and shares the versioned ones. A package-to-package edge on its
+own therefore says nothing about which repository's manifest declared it, and a naive closure
+walks a sibling's edges — putting packages in a document at versions that repository does not
+install. Measured on two real repositories in one estate, 6 % and 4 % of the closure was another
+repository's.
+
+The analyzers record the declaring scope on each such edge, as the model path of the directory
+whose manifest declared it (the repository root for the ordinary lockfile that sits there). Where
+several manifests declare the same edge, every scope is recorded — the paths joined by `//`,
+a sequence that cannot occur inside a single model path.
+
+An edge is followed when its declaring scope and the element the document is rooted at lie on the
+**same root-to-leaf line**: the scope is that element, an ancestor of it, or a descendant of it.
+Not merely "inside it" — a lockfile sits at a repository root while a directory-level document is
+rooted below it, so an "inside" test would empty the closure of every directory-level document.
+
+**An edge with no declaring scope is followed.** Every model stored before the attribute existed
+carries none, and the pip and NuGet analyzers record none today. Absence means unknown
+provenance, and unknown provenance keeps the behaviour that was there before; reading it as
+"skip" would silently empty those closures.
+
+With the closure, `dependencies` becomes a graph rather than a flat list: every package that
+pulls in another gets an entry of its own, so a consumer can trace *which* package introduced an
+exposure instead of only learning that it is present.
+
+```json
+"dependencies": [
+  { "ref": "repoa", "dependsOn": ["pkg:npm/express@4.18.2"] },
+  { "ref": "pkg:npm/express@4.18.2", "dependsOn": ["pkg:npm/body-parser@1.20.1"] },
+  { "ref": "pkg:npm/body-parser@1.20.1", "dependsOn": ["pkg:npm/qs@6.11.0"] }
+]
+```
+
+- A package reached **only** through another one is listed under that package, not under the
+  element. Listing it under the element would assert a direct dependency no manifest declares,
+  and contradict the `dependencyDepth` the same document publishes for it.
+- A package that is **both** declared and pulled in appears under both.
+- Every ref resolves within the document, except `urn:cdx:` BOM-Links, which name another
+  document by design.
+- Without `--transitive-externals` there are no package-to-package hops, so the section keeps the
+  single flat entry it has always had.
+
+### Internal packages
+
+A dependency that resolves to **another element of the same estate** is a third category: not the
+document's own subject, and not a 3rd-party package. It appears as a component marked
+`softagram:internal`, alongside the `urn:cdx:` BOM-Link that has always been in `dependsOn`.
+
+```json
+{ "bom-ref": "repob",
+  "type": "library",
+  "name": "ui-lib",
+  "version": "2.1.0",
+  "purl": "pkg:generic/ui-lib@2.1.0",
+  "group": "/OrgName/GroupA",
+  "properties": [
+    { "name": "softagram:internal", "value": "true" },
+    { "name": "softagram:packageName", "value": "ui-lib" },
+    { "name": "softagram:packageEcosystem", "value": "npm" },
+    { "name": "softagram:elementPath", "value": "/OrgName/GroupA/repoB" }
+  ],
+  "externalReferences": [
+    { "url": "urn:cdx:b02cf884-4fe6-5d96-8bab-a649ae9844b2/1", "type": "bom" },
+    { "url": "https://example.org/org/repoB.git", "type": "vcs" }
+  ] }
+```
+
+| Field | Meaning |
+|-------|---------|
+| `name` / `version` / `purl` | The package the element publishes, when the model says unambiguously which one that is. Otherwise the element's own name, an empty version and an empty purl. |
+| `properties[softagram:internal]` | Always `"true"` on these components. |
+| `properties[softagram:packageName]` | The published package name, the same one spliced into the purl. |
+| `properties[softagram:packageEcosystem]` | The ecosystem the package is published in (`npm`, `pypi`, ...). Absent when the model does not name one; it decides no part of the purl. |
+| `externalReferences[type=bom]` | BOM-Link to that element's own standalone document. |
+
+- **The purl type is `generic`, never the ecosystem's own type.** `pkg:npm/<name>@<version>` would
+  assert an identity in the public npm registry. Either the name is not published there, in which
+  case the npm type buys nothing, or it is and belongs to someone else, in which case the
+  component silently inherits a stranger's advisories. The ecosystem is published as a property
+  instead, so nothing is lost but the false claim.
+- The dependency is emitted **both** as this component and as a `urn:cdx:` BOM-Link in
+  `dependsOn`. The link federates to the element's own document for a consumer that follows
+  links across uploads; the component is what a consumer that does not follow them can see at
+  all.
+- Only **direct** internal dependencies are inlined into a default document. `--transitive`
+  inlines the whole chain of them, together with the 3rd-party components of every link.
+- **In a default document the component appears only when the element publishes a package
+  identity**; without one, `dependsOn` carries the BOM-Link alone, exactly as before. A component
+  named after a repository or a directory, with no version and no purl, is the very shape the
+  missing-identifier problem is about, and until an analyzer stamps the identity attributes every
+  such component on an existing model would come out that way. So the default document changes
+  for a consumer only once the row can carry real coordinates.
+- **`--transitive` deliberately does not take that rule.** Inlining internal elements is what
+  that option has always done and its consumers already receive those rows; identity improves
+  them where it exists, but its absence must not delete a dependency a consumer can see today.
+  The asymmetry is intentional, not an inconsistency.
+- **How many of these a document holds scales with the granularity you select.** They are not a
+  fixed overhead: they are one component per element the chosen element directly depends on, so
+  the count follows the `--level` (or `--element-path`) you pass. A repository-level export
+  usually gains a handful. A directory-level export splits the same estate into far more, and
+  finer, elements, so dependencies that were internal to one repository become cross-element
+  ones — on a large repository a single directory-level document has been measured gaining
+  several hundred. That is the number of dependencies that directory genuinely has, not a
+  closure being walked; if it is more than you want, export at a coarser level.
+- An element that publishes **several** packages with nothing to choose between them is given no
+  identity at all: it keeps the element name and an empty purl. No coordinates are invented.
+- Components describing internal packages carry **no** `dependencyDepth`. That property counts
+  package hops through the 3rd-party closure, and an element of the estate is not one.
+
 ### Where an element lives
 
 Every component that describes a **model element** — the metadata component of each document,
-and the internal components inlined by `--transitive` — publishes its position in the model:
+and every internal component — publishes its position in the model:
 
 ```json
 { "bom-ref": "repoa",
@@ -297,9 +454,11 @@ Components describing **3rd-party packages** carry none of these. Their identity
   `org.apache.commons`. A model group is a tree location, and the slash-delimited path is what
   makes two identically named groups distinguishable, so this converter prefers precision over
   that convention. Tools that render `group` as a package coordinate will show the path.
-- **`purl` and `version` are empty** on components describing model elements. A repository has no
-  package identity and no version; a path is not a valid purl and is deliberately not placed
-  there.
+- **`purl` and `version` are empty on the metadata component**, and on an internal component
+  whose element publishes no unambiguous package. A repository has no package identity and no
+  version of its own; a path is not a valid purl and is deliberately not placed there. An
+  internal component whose element *does* publish one carries that package's coordinates — see
+  [Internal packages](#internal-packages).
 - The vcs reference is inherited by proximity. A repository with no remote of its own, under a
   group that has one, reports the group's URL.
 
