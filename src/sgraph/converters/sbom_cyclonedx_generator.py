@@ -639,7 +639,10 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         custom_properties.extend(purl_properties)
 
         if indirect_deps:
-            custom_properties.append({'name': 'indirectExposureCount', 'value': len(indirect_deps)})
+            # str(): CycloneDX types properties[].value as a string, so a bare int here
+            # fails schema validation and takes the whole document down with it.
+            custom_properties.append(
+                {'name': 'indirectExposureCount', 'value': str(len(indirect_deps))})
 
             abstracted_indirect = []
             for d in indirect_deps:

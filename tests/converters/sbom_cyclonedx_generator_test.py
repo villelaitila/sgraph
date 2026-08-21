@@ -2599,3 +2599,105 @@ def test_the_emission_fixture_yields_fourteen_distinct_components():
     components = get_emission_components()
     assert len(components) == 14
     assert len({component['bom-ref'] for component in components}) == 14
+
+
+# CycloneDX defines properties[].value as a string in every spec version the generator can emit
+# (verified against the 1.6 and 1.7 schemas, which both declare {"type": "string"} and set
+# additionalProperties false). A number there is not a lenient-consumer problem: a validating
+# consumer rejects the entire document, so one mistyped property discards the whole SBOM.
+
+
+def model_with_indirect_exposure():
+    """A package that is used directly AND reached through another package.
+
+    That double role is what makes indirectExposureCount reachable in the DEFAULT export
+    rather than only under the opt-in closure, so the fixture deliberately builds it: app.js
+    imports lodash itself, while util.js reaches the same lodash through express.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    util = model.createOrGetElementFromPath('/Org/repoA/src/util.js')
+    express = model.createOrGetElementFromPath(
+        '/Org/External/NPM/express/express of version 4.18.2')
+    lodash = model.createOrGetElementFromPath(
+        '/Org/External/NPM/lodash/lodash of version 4.17.21')
+    express.attrs['version'] = '4.18.2'
+    lodash.attrs['version'] = '4.17.21'
+
+    for source, target, deptype in ((app, lodash, 'use'),
+                                    (util, express, 'use'),
+                                    (express, lodash, 'packagejson')):
+        ea = SElementAssociation(source, target, deptype)
+        ea.initElems()
+    return model
+
+
+def every_property_value(documents):
+    """Yield (document name, component name, property name, value) across whole documents."""
+    for doc in documents:
+        doc_name = doc['metadata']['component']['name']
+        for component in doc.get('components', []):
+            for prop in component.get('properties', []):
+                yield doc_name, component.get('name'), prop['name'], prop['value']
+
+
+def test_indirect_exposure_count_is_a_string():
+    """The count is published as a string, because CycloneDX has no numeric property value."""
+    result = generate_multi_from_sgraph(model_with_indirect_exposure(), level=2)
+
+    lodash = next(c for c in result[0]['components'] if c['name'] == 'lodash')
+    count = find_property(lodash, 'indirectExposureCount')
+
+    assert count == '1'
+    assert isinstance(count, str)
+
+
+def test_indirect_exposure_count_is_a_string_in_closure_mode_too():
+    result = generate_multi_from_sgraph(model_with_indirect_exposure(), level=2,
+                                        transitive_externals=True)
+
+    lodash = next(c for c in result[0]['components'] if c['name'] == 'lodash')
+
+    assert find_property(lodash, 'indirectExposureCount') == '1'
+
+
+def test_the_count_still_carries_the_figure_it_always_did():
+    """Stringifying must not cost the exposure figure - that is the valuable part.
+
+    Two separate internal files reach lodash only through express, so the count is 2 and
+    distinguishes this model from the single-exposure one above.
+    """
+    model = model_with_indirect_exposure()
+    second = model.createOrGetElementFromPath('/Org/repoA/src/handler.js')
+    express = model.createOrGetElementFromPath(
+        '/Org/External/NPM/express/express of version 4.18.2')
+    ea = SElementAssociation(second, express, 'use')
+    ea.initElems()
+
+    result = generate_multi_from_sgraph(model, level=2)
+    lodash = next(c for c in result[0]['components'] if c['name'] == 'lodash')
+
+    assert find_property(lodash, 'indirectExposureCount') == '2'
+
+
+@pytest.mark.parametrize('kwargs', [
+    {},
+    {'transitive': True},
+    {'transitive_externals': True},
+    {'transitive': True, 'transitive_externals': True},
+])
+def test_no_property_value_is_ever_a_non_string(kwargs):
+    """The invariant, across whole documents rather than one field.
+
+    Pinning only indirectExposureCount would leave the next property free to repeat the
+    mistake; this fails for any emission site that forgets to stringify.
+    """
+    documents = generate_multi_from_sgraph(model_with_indirect_exposure(), level=2, **kwargs)
+    documents += generate_multi_from_sgraph(
+        get_model_and_model_api(MULTI_MODEL)[0], level=3, **kwargs)
+
+    offenders = [(doc, comp, name, type(value).__name__)
+                 for doc, comp, name, value in every_property_value(documents)
+                 if not isinstance(value, str)]
+
+    assert offenders == []
