@@ -1173,8 +1173,8 @@ def _report_unrecognized_package_edges(subtree_path, followed_any, skipped_depty
 
     A closure that reaches nothing produces a document identical to the default one, so on its
     own it cannot be told apart from a model that simply holds no package-to-package edges. That
-    ambiguity is not hypothetical: this module's own registry carried a deptype no analyzer had
-    ever emitted, and nothing in the output said so.
+    ambiguity is not hypothetical: this module's own registry carries deptypes no analyzer emits,
+    and without this line nothing in the output says so.
 
     Reported ONLY when nothing at all was followed. Externals also carry code-level edges — a
     symbol in one referencing a symbol in another — which the allow-list exists to skip, so a
@@ -1378,13 +1378,14 @@ def _keep_the_shorter_depth(surviving, duplicate):
 
     Each element of an inlined chain is walked breadth-first on its own, so within one walk the
     first depth recorded is already the shortest. Across the merge it is not: the surviving
-    component is simply the first ENCOUNTERED, and traversal starts at the root, so a package the
-    root reaches at the end of a long chain kept that depth even when an inlined element declares
-    it outright.
+    component is simply the first ENCOUNTERED, and traversal starts at the root, so without this
+    a package the root reaches at the end of a long chain keeps that depth even when an inlined
+    element declares it outright.
 
     That is not merely imprecise, it is self-contradictory: the dependency graph of the SAME
-    document keeps such a package under the element that declares it, so the document claimed a
-    direct dependency and a distance of three about one package. Only the property is lowered —
+    document keeps such a package under the element that declares it, so the document would
+    assert a direct dependency and a distance of three about one package. Only the property is
+    lowered —
     which component object survives, and the bom-ref every entry names, stay exactly as the merge
     decided.
 
@@ -1660,6 +1661,23 @@ def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=F
     return data
 
 
+def _validated_max_depth(max_depth):
+    """The cap as given, once it is one the closure can honour.
+
+    A cap below 1 excludes every component the walk could emit, so it states nothing a caller can
+    have meant. Treating it as 1 instead answers a different question than the one asked and says
+    nothing about the substitution, which is worse than a refusal: what comes back looks exactly
+    like what was requested.
+
+    None is not a cap and stays None. Raised rather than clamped: clamping would keep the silence
+    this removes, and the web API already turns a ValueError from this module into a validation
+    error for the request that carried the value.
+    """
+    if max_depth is not None and max_depth < 1:
+        raise ValueError(f'max_depth must be 1 or greater, or None for no cap; got {max_depth}')
+    return max_depth
+
+
 def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3, transitive: bool = False,
                                transitive_externals: bool = False,
                                max_depth: int | None = None) -> list[dict]:
@@ -1675,9 +1693,11 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3, transitive: bool 
         default: the closure multiplies component counts on models that carry it, and every
         existing consumer of the default output must keep receiving exactly what it received.
     :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
-        for the whole closure
+        for the whole closure. 1 or greater.
     :return: List of CycloneDX SBOM dicts
+    :raises ValueError: When max_depth is below 1
     """
+    max_depth = _validated_max_depth(max_depth)
     ctx = _multi_sbom_context(sgraph, level)
     return [_sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth)
             for orig_elem in ctx['orig_content_elements']]
@@ -1703,10 +1723,12 @@ def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
         default: the closure multiplies component counts on models that carry it, and every
         existing consumer of the default output must keep receiving exactly what it received.
     :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
-        for the whole closure
+        for the whole closure. 1 or greater.
     :return: One CycloneDX SBOM dict
-    :raises ValueError: When no element exists at the path, or it is in the External subtree
+    :raises ValueError: When no element exists at the path, when it is in the External subtree,
+        or when max_depth is below 1
     """
+    max_depth = _validated_max_depth(max_depth)
     path = element_path.rstrip('/')
     if not path.startswith('/'):
         raise ValueError(f"Element path must be absolute (start with '/'): {element_path}")
@@ -1764,6 +1786,11 @@ if __name__ == '__main__':
 
     if args.max_depth is not None and not args.transitive_externals:
         parser.error('--max-depth requires --transitive-externals')
+
+    # Checked here as well as in the generators, so the message names the flag that was typed
+    # rather than the parameter it maps to, and exits the way every other CLI misuse exits.
+    if args.max_depth is not None and args.max_depth < 1:
+        parser.error('--max-depth must be 1 or greater')
 
     g = SGraph.parse_xml_or_zipped_xml(args.model)
 
