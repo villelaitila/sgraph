@@ -3,8 +3,9 @@ import re
 from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sbom_cyclonedx_generator import (
-    deterministic_serial, slugify_bom_ref, generate_multi_from_sgraph,
-    generate_for_element_from_sgraph, infer_pkgtype_from_referencing_files
+    DECLARING_SCOPE_ATTRIBUTE, DECLARING_SCOPE_SEPARATOR, deterministic_serial, deptype_base,
+    slugify_bom_ref, generate_multi_from_sgraph, generate_for_element_from_sgraph,
+    infer_pkgtype_from_referencing_files
 )
 from ..modelapi_test import get_model_and_model_api
 
@@ -191,31 +192,188 @@ def test_transitive_mode_emits_the_exposure_chain_in_dependencies():
         assert not any(ref.startswith('urn:cdx:') for ref in depends_on)
 
 
-def test_transitive_mode_dependson_refs_all_resolve_within_the_bom():
-    """Every ref and dependsOn entry points at a component of the same BOM (DT-import safety)."""
-    model, _ = get_model_and_model_api(MULTI_MODEL)
-    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+def test_every_dependency_ref_resolves_within_the_bom():
+    """Every ref and dependsOn entry points at a component of the same BOM (DT-import safety).
 
-    for sbom in result:
-        known_refs = {c['bom-ref'] for c in sbom['components']}
-        known_refs.add(sbom['metadata']['component']['bom-ref'])
-        for entry in sbom['dependencies']:
-            assert entry['ref'] in known_refs
-            for ref in entry['dependsOn']:
-                assert ref in known_refs
+    Dependency-Track resolves refs only inside one uploaded document and drops the entry when a
+    ref names nothing, so a single dangling ref silently deletes a link of the exposure chain.
+    That risk is not specific to one mode: the internal closure merges refs across elements and
+    folds case-variant spellings, and the external closure adds edges between packages, so each
+    option is a fresh chance to emit a ref nothing resolves. Hence one invariant checked across
+    every combination rather than one test per mode — a new option inherits the check by being
+    added to the case list.
+    """
+    cases = [
+        ('multi fixture, default', get_model_and_model_api(MULTI_MODEL)[0], dict(level=3)),
+        ('multi fixture, internal closure', get_model_and_model_api(MULTI_MODEL)[0],
+         dict(level=3, transitive=True)),
+        ('multi fixture, both closures', get_model_and_model_api(MULTI_MODEL)[0],
+         dict(level=3, transitive=True, transitive_externals=True)),
+        ('package chain, external closure', npm_chain_model(3),
+         dict(level=2, transitive_externals=True)),
+        ('package chain, capped external closure', npm_chain_model(3),
+         dict(level=2, transitive_externals=True, max_depth=2)),
+    ]
+
+    for description, model, kwargs in cases:
+        for sbom in generate_multi_from_sgraph(model, **kwargs):
+            known_refs = {c['bom-ref'] for c in sbom['components']}
+            known_refs.add(sbom['metadata']['component']['bom-ref'])
+            for entry in sbom['dependencies']:
+                assert entry['ref'] in known_refs, description
+                for ref in entry['dependsOn']:
+                    if ref.startswith('urn:cdx:'):
+                        continue
+                    assert ref in known_refs, f'{description}: {ref}'
 
 
-def test_default_mode_is_unchanged_by_the_transitive_feature():
-    """Without transitive=True there are no inlined internal components and BOM-Links remain."""
+def test_a_directly_used_internal_dependency_with_identity_is_a_component_and_keeps_its_link():
+    """Default mode emits an internal dependency BOTH as a component and as a BOM-Link.
+
+    A declared dependency resolving inside the estate used to appear only as a 'urn:cdx:'
+    BOM-Link in dependsOn, and a consumer that does not follow BOM-Links across uploads —
+    Dependency-Track does not — saw no dependency at all.
+
+    The BOM-Link half is unchanged and stays. Emitting the component is an addition, not a
+    replacement: dropping the link would trade an invisible dependency for broken cross-document
+    federation, which is a different consumer's defect rather than a fix.
+    """
+    result = generate_multi_from_sgraph(published_package_model(), level=2)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    assert [c['name'] for c in internal_components(repo_a_sbom)] == ['ui-lib']
+
+    assert len(repo_a_sbom['dependencies']) == 1
+    depends_on = repo_a_sbom['dependencies'][0]['dependsOn']
+    assert slugify_bom_ref('repoB') in depends_on
+    assert any(ref.startswith('urn:cdx:') for ref in depends_on)
+
+
+def test_a_directly_used_internal_dependency_without_identity_is_only_a_bom_link():
+    """Without package identity the default view keeps exactly the output it had before.
+
+    A component named after a repository, with no version and no purl, is the shape the original
+    report complained about — and no analyzer in the released product stamps the identity
+    attributes, so on every model stored today EVERY such component would come out that way. On
+    one real model at directory granularity they would have been 2 656 of 3 168 rows. Emitting
+    them would change the default output for every existing consumer and would look like the
+    defect rather than the fix, so the component waits until it can carry real coordinates.
+
+    The BOM-Link is unaffected: a consumer that follows links loses nothing it has today.
+    """
     model, _ = get_model_and_model_api(MULTI_MODEL)
     result = generate_multi_from_sgraph(model, level=3)
 
     repo_a_sbom = sbom_of(result, 'repoA')
-    assert all(find_property(c, 'softagram:internal') is None
-               for c in repo_a_sbom['components'])
-    assert len(repo_a_sbom['dependencies']) == 1
-    assert any(ref.startswith('urn:cdx:')
-               for ref in repo_a_sbom['dependencies'][0]['dependsOn'])
+    assert internal_components(repo_a_sbom) == []
+
+    depends_on = repo_a_sbom['dependencies'][0]['dependsOn']
+    assert slugify_bom_ref('repoB') not in depends_on
+    assert any(ref.startswith('urn:cdx:') for ref in depends_on)
+
+
+def test_the_transitive_view_still_inlines_an_internal_element_without_identity():
+    """The asymmetry between the two views is deliberate, not an oversight.
+
+    Inlining internal elements is what --transitive has always done; its consumers already
+    receive those rows, and suppressing them when identity is absent would remove a dependency
+    a consumer can see today. Identity improves those rows where it exists; its absence must not
+    delete them. The default view is the opposite case: there the row would be new.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    inlined = internal_components(sbom_of(result, 'repoA'))
+    assert [c['name'] for c in inlined] == ['repoB']
+    assert inlined[0]['purl'] == ''
+
+
+def test_the_third_party_components_are_untouched_by_internal_inlining():
+    """The 3rd-party rows are the same rows in the same order, with internal ones appended after.
+
+    A consumer diffing two documents across this change must see an addition, not a reordering,
+    and a 3rd-party component must not pick up an internal marker on the way through.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+    result = generate_multi_from_sgraph(model, level=3)
+
+    repo_a_sbom = sbom_of(result, 'repoA')
+    third_party = [c for c in repo_a_sbom['components']
+                   if find_property(c, 'softagram:internal') is None]
+
+    assert [c['bom-ref'] for c in third_party] == ['pkg:nuget/Newtonsoft.Json@13.0.1']
+    assert repo_a_sbom['components'][0]['bom-ref'] == 'pkg:nuget/Newtonsoft.Json@13.0.1'
+    assert repo_a_sbom['dependencies'][0]['dependsOn'][0] == 'pkg:nuget/Newtonsoft.Json@13.0.1'
+
+
+def test_the_default_document_gains_the_direct_internal_dependencies_and_no_more():
+    """repoA -> repoB -> repoC adds repoB alone: the default document is not a closure.
+
+    Inlining the whole chain is what --transitive exists for, and it multiplies document size.
+    This is a defect fix for a handful of direct dependencies and must not quietly turn every
+    default document into the transitive one.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.js')
+    c_file = model.createOrGetElementFromPath('/Org/repoC/src/c.js')
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(b_file, c_file, 'use').initElems()
+
+    for repo in ('repoA', 'repoB', 'repoC'):
+        model.createOrGetElementFromPath(f'/Org/{repo}/package.json/{repo}-pkg').attrs.update(
+            {'package_name': f'{repo}-pkg', 'version': '1.0.0', 'ecosystem': 'npm'})
+
+    result = generate_multi_from_sgraph(model, level=2)
+
+    assert [c['name'] for c in sbom_of(result, 'repoA')['components']] == ['repoB-pkg']
+    assert [c['name'] for c in sbom_of(result, 'repoB')['components']] == ['repoC-pkg']
+    assert sbom_of(result, 'repoC')['components'] == []
+
+
+def test_the_default_mode_internal_component_is_the_one_transitive_mode_inlines():
+    """One shape for an internal component, whichever mode produced it.
+
+    Two builders would drift: a consumer would then see the same element described differently
+    depending on a flag it did not set, and the identity work of one mode would silently not
+    reach the other.
+    """
+    model = published_package_model()
+
+    default_component = internal_components(
+        sbom_of(generate_multi_from_sgraph(model, level=2), 'repoA'))
+    transitive_component = internal_components(
+        sbom_of(generate_multi_from_sgraph(model, level=2, transitive=True), 'repoA'))
+
+    assert default_component == transitive_component
+    assert default_component[0]['purl'] == 'pkg:generic/ui-lib@2.1.0'
+
+
+def test_a_repeated_internal_edge_produces_one_component_and_one_link():
+    """Several associations onto the same element are one dependency, not several rows."""
+    model = SGraph(SElement(None, ''))
+    first = model.createOrGetElementFromPath('/Org/repoA/src/first.js')
+    second = model.createOrGetElementFromPath('/Org/repoA/src/second.js')
+    used = model.createOrGetElementFromPath('/Org/repoB/src/util.js')
+    internal_package_element(model, '/Org/repoB/package.json/util', 'util', '1.0.0', 'npm')
+    SElementAssociation(first, used, 'use').initElems()
+    SElementAssociation(second, used, 'use').initElems()
+
+    repo_a_sbom = sbom_of(generate_multi_from_sgraph(model, level=2), 'repoA')
+
+    assert len(internal_components(repo_a_sbom)) == 1
+    depends_on = repo_a_sbom['dependencies'][0]['dependsOn']
+    assert depends_on.count(slugify_bom_ref('repoB')) == 1
+    assert len([ref for ref in depends_on if ref.startswith('urn:cdx:')]) == 1
+
+
+def test_a_selected_element_document_inlines_its_internal_dependencies_too():
+    """--element-path takes the same default path, so the fix is not level-mode-only."""
+    model = published_package_model()
+
+    sbom = generate_for_element_from_sgraph(model, '/Org/repoA')
+
+    assert [c['name'] for c in internal_components(sbom)] == ['ui-lib']
 
 
 def test_transitive_mode_terminates_on_dependency_cycles():
@@ -273,6 +431,922 @@ def test_transitive_dedup_folds_case_like_the_per_subtree_walk():
     # otherwise the fold reintroduces a dangling ref inside the BOM
     entries = {d['ref']: d['dependsOn'] for d in repo_a_sbom['dependencies']}
     assert entries[slugify_bom_ref('repoB')] == ['pkg:nuget/NLog@5.0.0']
+
+
+# --- External-to-external closure tests ---
+#
+# The per-subtree walk collects the externals an internal element points AT. A package that only
+# another package points at — the resolved closure a lockfile declares, already stored in every
+# model the pip and NuGet analyzers produce — is invisible to that walk however many such edges
+# the model holds. transitive_externals=True continues the walk from each external across
+# External -> External associations, so that closure reaches the BOM.
+#
+# Opt-in, deliberately: the closure multiplies component counts on models that carry it, and
+# every existing consumer of the default output must keep receiving exactly what it received
+# before.
+
+
+def npm_package(model, name, version):
+    """A versioned NPM external in the shape the analyzers store it: NPM/<name>/<name> of version X.
+
+    The versioned element is a CHILD of a package element rather than a direct child of the
+    ecosystem root. That two-level shape is what makes the child-descent trap below reachable
+    at all, so the tests here use it even where a flatter model would read more simply.
+    """
+    elem = model.createOrGetElementFromPath(
+        f'/Org/External/NPM/{name}/{name} of version {version}')
+    elem.attrs['version'] = version
+    return elem
+
+
+def nuget_package(model, name, version):
+    """A versioned NuGet external in the shape the .NET analyzers store it, under 'Assemblies'.
+
+    No element on that path names the ecosystem the way NPM/ and PIP/ do, so the purl type is
+    resolved from the ancestor name instead. Kept faithful to the analyzers' path on purpose: a
+    fixture that invented an ecosystem-named parent would exercise a shape no model holds.
+    """
+    elem = model.createOrGetElementFromPath(
+        f'/Org/External/Assemblies/{name}/{name} of version {version}')
+    elem.attrs['version'] = version
+    return elem
+
+
+def npm_chain_model(length, deptype='packagejson'):
+    """A repo declaring pkg1 in its manifest, with pkg{n} -> pkg{n+1} inside External.
+
+    'packagejson' because that is what the package-to-package edges on stored models actually
+    carry: the npm audit analyzer writes it, and it accounts for every npm External -> External
+    edge in the measured corpus. The default used to be 'packagelock', which no analyzer has yet
+    emitted anywhere — so eleven tests exercised the registry entry that carries no data while
+    removing the entry that carries all of it left the whole suite green. A fixture default is
+    the easiest place for that kind of gap to hide, which is why the deptypes below that are NOT
+    the common case are now spelled out at their call sites.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    packages = [npm_package(model, f'pkg{n}', f'{n}.0.0') for n in range(1, length + 1)]
+    SElementAssociation(app, packages[0], 'packagejson').initElems()
+    for user, used in zip(packages, packages[1:]):
+        SElementAssociation(user, used, deptype).initElems()
+    return model
+
+
+def component_names(result, name):
+    return sorted(c['name'] for c in sbom_of(result, name)['components'])
+
+
+def test_external_to_external_edges_are_not_followed_by_default():
+    """A package reachable only through another package stays out of the default BOM.
+
+    The only test in this group that must pass BOTH before and after the closure exists: it
+    pins the behaviour the opt-in flag is not allowed to change, so a regression in the default
+    path surfaces here rather than in a consumer's pipeline.
+    """
+    model = npm_chain_model(2)
+    result = generate_multi_from_sgraph(model, level=2)
+
+    assert component_names(result, 'repoA') == ['pkg1']
+
+
+def test_transitive_externals_pulls_an_indirectly_reachable_package():
+    """With the flag, the package only pkg1 depends on becomes a component of its own."""
+    model = npm_chain_model(2)
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_names(result, 'repoA') == ['pkg1', 'pkg2']
+
+
+def test_transitive_externals_tags_every_component_with_its_dependency_depth():
+    """Each component reports how many package hops separate it from the analyzed code.
+
+    Depth 1 carries the property too, so a consumer of an opt-in BOM reads one uniform field
+    instead of treating an absent property as 'direct'. The property is absent altogether from
+    a default-mode BOM, which is the coherent signal that the BOM makes no depth claim at all.
+    """
+    model = npm_chain_model(3)
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    depths = {c['name']: find_property(c, 'dependencyDepth')
+              for c in sbom_of(result, 'repoA')['components']}
+    assert depths == {'pkg1': '1', 'pkg2': '2', 'pkg3': '3'}
+
+
+def test_dependency_depth_is_absent_from_a_default_mode_bom():
+    """Default output is byte-identical to what it was before the closure existed."""
+    model = npm_chain_model(2)
+    result = generate_multi_from_sgraph(model, level=2)
+
+    assert all(find_property(c, 'dependencyDepth') is None
+               for c in sbom_of(result, 'repoA')['components'])
+
+
+def test_transitive_externals_terminates_on_an_external_dependency_cycle():
+    """a -> b -> a resolves to two components instead of looping."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    cyclic_a = npm_package(model, 'cyclic-a', '1.0.0')
+    cyclic_b = npm_package(model, 'cyclic-b', '1.0.0')
+    SElementAssociation(app, cyclic_a, 'packagejson').initElems()
+    SElementAssociation(cyclic_a, cyclic_b, 'packagelock').initElems()
+    SElementAssociation(cyclic_b, cyclic_a, 'packagelock').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    components = {c['name']: c for c in sbom_of(result, 'repoA')['components']}
+
+    assert sorted(components) == ['cyclic-a', 'cyclic-b']
+    # The edge back into a package already reached does not re-tag it at the deeper level:
+    # the depth reported is the shortest route, the same first-wins rule deduplication uses.
+    assert find_property(components['cyclic-a'], 'dependencyDepth') == '1'
+
+
+def test_the_shortest_of_two_routes_is_the_depth_a_package_reports():
+    """Two routes to one package, and the document publishes the shorter one.
+
+    The walk is breadth-first exactly so that the first depth recorded for a package is its
+    shortest route, and until now nothing pinned that. A depth-first walk terminates on the same
+    cycles, emits the same components and passes the cycle test above — it differs only in the
+    depth it publishes, which is the one thing a consumer reads to judge how far away a package
+    is.
+
+    Declaration order is load-bearing: 'far' is declared last, so it is what a stack-based walk
+    pops first, and the long route then reaches 'target' before the short one does. Breadth-first
+    reports 2 here, depth-first would report 3.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    near = npm_package(model, 'near', '1.0.0')
+    far = npm_package(model, 'far', '1.0.0')
+    middle = npm_package(model, 'middle', '1.0.0')
+    target = npm_package(model, 'target', '1.0.0')
+    SElementAssociation(app, near, 'packagejson').initElems()
+    SElementAssociation(app, far, 'packagejson').initElems()
+    SElementAssociation(near, target, 'packagejson').initElems()
+    SElementAssociation(far, middle, 'packagejson').initElems()
+    SElementAssociation(middle, target, 'packagejson').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    components = {c['name']: c for c in sbom_of(result, 'repoA')['components']}
+
+    assert find_property(components['target'], 'dependencyDepth') == '2'
+
+
+def test_max_depth_caps_the_closure_at_the_requested_level():
+    """A cap of 2 over a four-package chain yields exactly the first two levels."""
+    model = npm_chain_model(4)
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True, max_depth=2)
+
+    assert component_names(result, 'repoA') == ['pkg1', 'pkg2']
+
+
+def test_a_finding_under_a_versioned_external_is_never_a_component():
+    """Traversal follows associations only: the children of an external are not its dependencies.
+
+    Vulnerability and deprecation findings are stored as CHILDREN of versioned external
+    elements, and a versioned element is itself a child of its package element. A walk that
+    descended into children would emit findings and unreferenced sibling versions as if they
+    were packages.
+
+    Both shapes are present here on purpose, and they fail two different wrong walks.
+
+    The finding is given a 'version' attribute on top of the attributes the analyzers store, so
+    that valid_for_bom ADMITS it. That is the discriminator, and it has to be stated rather than
+    assumed: findings on stored models are rejected by valid_for_bom on their own attributes —
+    'package_version' is not the 'version' key it reads, and across the models that carry
+    findings not one of them passes. So against a faithful finding, valid_for_bom is what keeps
+    a child-descending walk out of the BOM, the traversal rule is never consulted, and the test
+    passes while proving nothing. It did exactly that until this attribute was added.
+
+    The unreferenced sibling version covers the wider mistake instead: a walk that reached its
+    element's PARENT's children — the 'elem.incoming + elem.parent.incoming' idiom this module
+    uses elsewhere — inventories versions of a package that nothing references.
+    """
+    model = npm_chain_model(2)
+    versioned = model.findElementFromPath('/Org/External/NPM/pkg2/pkg2 of version 2.0.0')
+    finding = SElement(versioned, 'pkg2_GHSA-0000-0000-0000')
+    finding.attrs['package_name'] = 'pkg2'
+    finding.attrs['package_version'] = '2.0.0'
+    finding.attrs['version'] = '2.0.0'
+    finding.attrs['range'] = '<2.1.0'
+    finding.setType('vulnerability')
+    unreferenced_sibling = model.createOrGetElementFromPath(
+        '/Org/External/NPM/pkg2/pkg2 of version 1.0.0')
+    unreferenced_sibling.attrs['version'] = '1.0.0'
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    components = sbom_of(result, 'repoA')['components']
+
+    assert sorted(c['name'] for c in components) == ['pkg1', 'pkg2']
+    assert [c['version'] for c in components if c['name'] == 'pkg2'] == ['2.0.0']
+
+
+def test_a_dev_prefixed_deptype_traverses_exactly_like_its_base():
+    """dev_packagelock is a packagelock edge declared in a development section.
+
+    Scope handling — whether a development-only package should be marked 'optional' in the BOM
+    — is a separate concern and deliberately not decided here. This pins only that the reserved
+    prefix does not make the edge invisible to the closure.
+    """
+    model = npm_chain_model(2, deptype='dev_packagelock')
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_names(result, 'repoA') == ['pkg1', 'pkg2']
+
+
+def test_deptype_base_strips_only_the_reserved_development_prefix():
+    """'development' is not a prefixed deptype: the separator is part of the convention."""
+    assert deptype_base('dev_packagelock') == 'packagelock'
+    assert deptype_base('packagelock') == 'packagelock'
+    assert deptype_base('development') == 'development'
+
+
+def test_an_edge_that_is_not_a_package_relation_is_not_followed():
+    """Only deptypes meaning 'package depends on package' are traversed.
+
+    External elements carry code-level edges too — a symbol in one external referencing a symbol
+    in another — and following those would fill the BOM with packages the project never
+    declared. That is why the registry is an allow-list rather than 'follow everything'.
+    """
+    model = npm_chain_model(2, deptype='inherits')
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_names(result, 'repoA') == ['pkg1']
+
+
+def test_an_empty_closure_names_the_deptypes_it_skipped(capsys):
+    """An empty closure is otherwise indistinguishable from a model that holds no edges at all.
+
+    Both produce a document identical to the default one, so someone who enabled the option and
+    saw nothing change cannot tell "the analyzers stored no closure" from "the closure is stored
+    under a deptype this converter does not recognise". The second is not hypothetical: the
+    registry carried a deptype no analyzer emitted, and no output said so.
+    """
+    model = npm_chain_model(2, deptype='inherits')
+    generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    err = capsys.readouterr().err
+    assert '/Org/repoA' in err
+    assert 'inherits' in err
+
+
+def test_a_closure_that_followed_an_edge_reports_nothing(capsys):
+    """Silence whenever the closure works, which is what keeps the report above worth reading.
+
+    Code-level edges between externals are the ordinary case rather than an anomaly — the
+    registry is an allow-list precisely because they exist — so reporting each skipped one would
+    fire on nearly every model and train a reader to ignore the line.
+    """
+    model = npm_chain_model(2)
+    code_level_target = npm_package(model, 'unrelated', '1.0.0')
+    SElementAssociation(model.findElementFromPath('/Org/External/NPM/pkg2/pkg2 of version 2.0.0'),
+                        code_level_target, 'inherits').initElems()
+
+    generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert capsys.readouterr().err == ''
+
+
+def test_a_default_mode_document_reports_no_skipped_deptype(capsys):
+    """A document that never walks those edges makes no claim about them either."""
+    model = npm_chain_model(2, deptype='inherits')
+    generate_multi_from_sgraph(model, level=2)
+
+    assert capsys.readouterr().err == ''
+
+
+def test_the_closure_is_ecosystem_independent_and_follows_pip_edges():
+    """The same rule resolves a pip closure, which is the data stored models already hold."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.py')
+    requests = model.createOrGetElementFromPath(
+        '/Org/External/PIP/requests/requests of version 2.31.0')
+    requests.attrs['version'] = '2.31.0'
+    urllib3 = model.createOrGetElementFromPath(
+        '/Org/External/PIP/urllib3/urllib3 of version 2.2.1')
+    urllib3.attrs['version'] = '2.2.1'
+    SElementAssociation(app, requests, 'pip').initElems()
+    SElementAssociation(requests, urllib3, 'pip').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    components = {c['name']: c for c in sbom_of(result, 'repoA')['components']}
+
+    assert sorted(components) == ['requests', 'urllib3']
+    assert components['urllib3']['purl'] == 'pkg:pypi/urllib3@2.2.1'
+    assert find_property(components['urllib3'], 'dependencyDepth') == '2'
+
+
+def test_the_closure_follows_a_lockfile_declared_edge():
+    """The lockfile deptype is traversed too, ahead of the analyzer that emits it.
+
+    No stored model carries a 'packagelock' edge yet: the analyzer that writes them ships
+    alongside this converter. So this deptype is pinned by intent rather than by data, and it is
+    stated at the call site rather than inherited from a fixture default — inheriting it is
+    precisely how the deptypes that DO carry the data ended up pinned by nothing.
+    """
+    model = npm_chain_model(2, deptype='packagelock')
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_names(result, 'repoA') == ['pkg1', 'pkg2']
+
+
+def test_the_closure_follows_a_nuget_package_reference_edge():
+    """The .NET analyzer's deptype, which carries every NuGet closure edge on stored models.
+
+    Second in volume after the npm audit analyzer's, and pinned by nothing before this test: the
+    registry entry could be deleted with the suite still green. It also exercises a subtree whose
+    purl type resolves from an ancestor name rather than from an ecosystem-named root, which is
+    the shape .NET externals are stored in.
+    """
+    model = SGraph(SElement(None, ''))
+    project = model.createOrGetElementFromPath('/Org/repoA/src/App.csproj')
+    serilog = nuget_package(model, 'Serilog', '3.1.1')
+    sink = nuget_package(model, 'Serilog.Sinks.Console', '5.0.0')
+    SElementAssociation(project, serilog, 'package_reference').initElems()
+    SElementAssociation(serilog, sink, 'package_reference').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    components = {c['name']: c for c in sbom_of(result, 'repoA')['components']}
+
+    assert sorted(components) == ['Serilog', 'Serilog.Sinks.Console']
+    assert components['Serilog.Sinks.Console']['purl'] == 'pkg:nuget/Serilog.Sinks.Console@5.0.0'
+    assert find_property(components['Serilog.Sinks.Console'], 'dependencyDepth') == '2'
+
+
+def test_the_closure_composes_with_the_internal_transitive_mode():
+    """Both flags together: the closure is collected for every element of the inlined chain."""
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.js')
+    direct = npm_package(model, 'direct-of-b', '1.0.0')
+    indirect = npm_package(model, 'indirect-of-b', '1.0.0')
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(b_file, direct, 'packagejson').initElems()
+    SElementAssociation(direct, indirect, 'packagelock').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive=True,
+                                        transitive_externals=True)
+    components = {c['name']: c for c in sbom_of(result, 'repoA')['components']}
+
+    assert find_property(components['indirect-of-b'], 'dependencyDepth') == '2'
+    assert find_property(components['indirect-of-b'], 'softagram:via') == 'repoB'
+
+
+def test_a_package_an_inlined_element_declares_reports_the_shorter_depth():
+    """The depth a component publishes must agree with where this document's graph places it.
+
+    Constructed from the two modes together: the root reaches 'shared' only at the end of its own
+    package chain, while the inlined element declares it outright. The cross-element merge keeps
+    the first component encountered, and traversal starts at the root, so the root's longer route
+    used to win the depth property — while the attachment logic correctly kept the package under
+    the element that declares it. The same document then said 'three hops away' and 'directly
+    depended upon' about the same package.
+
+    The rule is the one already stated for a single walk: of several routes, the shortest is
+    reported. Across the merge it has to be enforced rather than inherited, because there
+    first-wins is traversal order between elements, not distance.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.js')
+    first = npm_package(model, 'first', '1.0.0')
+    second = npm_package(model, 'second', '2.0.0')
+    shared = npm_package(model, 'shared', '9.9.9')
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(a_file, first, 'packagejson').initElems()
+    SElementAssociation(first, second, 'packagejson').initElems()
+    SElementAssociation(second, shared, 'packagejson').initElems()
+    SElementAssociation(b_file, shared, 'packagejson').initElems()
+
+    document = sbom_of(generate_multi_from_sgraph(model, level=2, transitive=True,
+                                                  transitive_externals=True), 'repoA')
+    components = {c['name']: c for c in document['components']}
+    entries = {entry['ref']: entry['dependsOn'] for entry in document['dependencies']}
+
+    assert 'pkg:npm/shared@9.9.9' in entries[slugify_bom_ref('repoB')]
+    assert find_property(components['shared'], 'dependencyDepth') == '1'
+
+
+# --- Dependency graph of the external closure ---
+#
+# Collecting the deeper packages is only half of what a consumer tracing an exposure path needs.
+# Listed flat under the element, they say THAT a package is present but not WHICH package pulled
+# it in, and they contradict the dependencyDepth published on the same component: a component
+# reported at depth 2 cannot also be a direct dependency of the element. These tests pin the
+# graph the collected hops are turned into.
+
+
+def dependency_entries(result, name):
+    """The dependencies section of one document, indexed by ref."""
+    return {entry['ref']: entry['dependsOn'] for entry in sbom_of(result, name)['dependencies']}
+
+
+def test_the_closure_emits_a_dependency_graph_entry_per_package_hop():
+    """Each package-to-package hop becomes its own entry, and the element keeps only its own."""
+    model = npm_chain_model(3)
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    entries = dependency_entries(result, 'repoA')
+
+    assert entries[slugify_bom_ref('repoA')] == ['pkg:npm/pkg1@1.0.0']
+    assert entries['pkg:npm/pkg1@1.0.0'] == ['pkg:npm/pkg2@2.0.0']
+    assert entries['pkg:npm/pkg2@2.0.0'] == ['pkg:npm/pkg3@3.0.0']
+
+
+def test_a_package_both_declared_and_pulled_in_hangs_off_both():
+    """Being reachable through another package does not stop a package being declared directly.
+
+    The rule that moves a deeper package out of the element's dependsOn is 'attached elsewhere',
+    which on its own would also move this one — and the document would then deny a dependency
+    the manifest actually declares.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    declared = npm_package(model, 'declared', '1.0.0')
+    shared = npm_package(model, 'shared', '9.9.9')
+    SElementAssociation(app, declared, 'packagejson').initElems()
+    SElementAssociation(app, shared, 'packagejson').initElems()
+    SElementAssociation(declared, shared, 'packagelock').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    entries = dependency_entries(result, 'repoA')
+
+    assert entries[slugify_bom_ref('repoA')] == ['pkg:npm/declared@1.0.0', 'pkg:npm/shared@9.9.9']
+    assert entries['pkg:npm/declared@1.0.0'] == ['pkg:npm/shared@9.9.9']
+
+
+def test_a_hop_from_an_undescribed_package_still_leaves_its_target_in_the_graph():
+    """A component no hop can name hangs off the element rather than dropping out of the graph.
+
+    An unversioned package element describes no component of its own — valid_for_bom rejects it —
+    yet it carries the edges to what it resolves to, so the hop is traversed and has no ref to be
+    recorded under. Its target is a real component either way, and a component present in
+    components[] but named by no entry is unreachable in a consumer's tree.
+
+    Passes both before and after the graph exists: it locks the behaviour the change must not
+    lose, which is exactly why it is written as a separate case rather than folded into one of
+    the tests above.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    undescribed = model.createOrGetElementFromPath('/Org/External/NPM/pkg1')
+    resolved = npm_package(model, 'pkg2', '2.0.0')
+    SElementAssociation(app, undescribed, 'packagejson').initElems()
+    SElementAssociation(undescribed, resolved, 'packagelock').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    entries = dependency_entries(result, 'repoA')
+
+    assert entries[slugify_bom_ref('repoA')] == ['pkg:npm/pkg2@2.0.0']
+
+
+def test_the_dependency_graph_is_one_flat_entry_without_the_closure_flag():
+    """The default document keeps the single entry it has always had."""
+    model = npm_chain_model(3)
+    result = generate_multi_from_sgraph(model, level=2)
+
+    assert sbom_of(result, 'repoA')['dependencies'] == [{
+        'ref': slugify_bom_ref('repoA'),
+        'dependsOn': ['pkg:npm/pkg1@1.0.0']
+    }]
+
+
+def test_the_closure_graph_survives_the_internal_transitive_merge():
+    """Package hops collected through an inlined internal element reach the graph too.
+
+    The internal closure merges the components of several elements into one document and folds
+    case-variant spellings while doing it. Both endpoints of a hop must be rewritten to the
+    surviving spelling on the way through, or the graph names a component the merge removed.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.js')
+    direct = npm_package(model, 'direct-of-b', '1.0.0')
+    indirect = npm_package(model, 'indirect-of-b', '1.0.0')
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    SElementAssociation(b_file, direct, 'packagejson').initElems()
+    SElementAssociation(direct, indirect, 'packagelock').initElems()
+
+    result = generate_multi_from_sgraph(model, level=2, transitive=True,
+                                        transitive_externals=True)
+    entries = dependency_entries(result, 'repoA')
+
+    assert entries[slugify_bom_ref('repoB')] == ['pkg:npm/direct-of-b@1.0.0']
+    assert entries['pkg:npm/direct-of-b@1.0.0'] == ['pkg:npm/indirect-of-b@1.0.0']
+
+
+# --- Declaring-scope provenance tests ---
+#
+# The External subtree is project-wide: every repository's resolved tree lands in the same
+# External/<ecosystem> elements and shares the versioned ones. A package-to-package edge therefore
+# says nothing about which repository's manifest declared it, and the closure of one repository
+# follows a sibling's edges — reporting packages at versions it does not install, which is a false
+# positive of exactly the kind the closure exists to remove.
+#
+# The analyzers now record the declaring scope on the edge. An edge is followed when that scope
+# and the subtree being collected lie on the same root-to-leaf line: the scope IS the subtree, an
+# ancestor of it, or a descendant of it. Not merely "under the subtree" — a directory-level export
+# is rooted below the repository whose lockfile declared the edges, and a prefix test would empty
+# its closure entirely.
+
+
+def declare(user, used, deptype, *scopes):
+    """A package-to-package edge whose declaring scopes are recorded on it."""
+    assoc = SElementAssociation(user, used, deptype)
+    assoc.initElems()
+    assoc.attrs[DECLARING_SCOPE_ATTRIBUTE] = DECLARING_SCOPE_SEPARATOR.join(scopes)
+    return assoc
+
+
+def two_repository_model(deptype='packagelock', scope_a='/Org/repoA', scope_b='/Org/repoB'):
+    """Two repositories sharing one package, each resolving it onto a different onward version.
+
+    This is the measured defect in miniature: 'shared' is one element carrying both repositories'
+    edges, so without provenance each repository's closure reaches the other's onward package.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.js')
+    shared = npm_package(model, 'shared', '1.0.0')
+    onward_a = npm_package(model, 'onward', '1.0.0')
+    onward_b = npm_package(model, 'onward', '2.0.0')
+    SElementAssociation(a_file, shared, 'packagejson').initElems()
+    SElementAssociation(b_file, shared, 'packagejson').initElems()
+    declare(shared, onward_a, deptype, scope_a)
+    declare(shared, onward_b, deptype, scope_b)
+    return model
+
+
+def component_versions(sbom, name):
+    return sorted(c['version'] for c in sbom['components'] if c['name'] == name)
+
+
+def test_an_edge_declared_only_by_another_repository_is_not_followed():
+    """The whole point: repoA's closure stops at the version repoA's own manifest resolves."""
+    result = generate_multi_from_sgraph(two_repository_model(), level=2,
+                                        transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'repoA'), 'onward') == ['1.0.0']
+    assert component_versions(sbom_of(result, 'repoB'), 'onward') == ['2.0.0']
+
+
+def test_an_edge_with_no_declaring_scope_is_followed():
+    """Absence means unknown provenance, and unknown provenance keeps today's behaviour.
+
+    Every model stored before the attribute existed carries no scope on any edge, and the pip and
+    NuGet analyzers still record none. Reading absence as 'skip' would silently empty those
+    closures — a far worse failure than the contamination being fixed here.
+    """
+    model = npm_chain_model(3)
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_names(result, 'repoA') == ['pkg1', 'pkg2', 'pkg3']
+
+
+def test_an_edge_declared_by_two_repositories_is_followed_from_both():
+    """A shared edge is a fact about every repository that declared it, not about the last one."""
+    model = two_repository_model(scope_a='/Org/repoA', scope_b='/Org/repoA')
+    shared = model.findElementFromPath('/Org/External/NPM/shared/shared of version 1.0.0')
+    for assoc in shared.outgoing:
+        assoc.attrs[DECLARING_SCOPE_ATTRIBUTE] = DECLARING_SCOPE_SEPARATOR.join(
+            ['/Org/repoA', '/Org/repoB'])
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'repoA'), 'onward') == ['1.0.0', '2.0.0']
+    assert component_versions(sbom_of(result, 'repoB'), 'onward') == ['1.0.0', '2.0.0']
+
+
+def test_a_directory_level_export_still_follows_its_repositorys_edges():
+    """The scope is the repository root; the subtree is a directory inside it.
+
+    A repository-level test passes under a prefix rule and under the correct one alike, so this
+    is the case that tells them apart. A lockfile sits at the repository root, so under a prefix
+    rule its scope is never 'under' a directory-level subtree and the closure would silently
+    collapse to the packages the directory declares directly — the flag becoming a no-op at
+    exactly the granularity that is otherwise the expensive one.
+    """
+    result = generate_multi_from_sgraph(two_repository_model(), level=3,
+                                        transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'src'), 'onward') == ['1.0.0']
+
+
+def test_a_directory_level_export_still_excludes_a_sibling_repositorys_edges():
+    """Reaching deeper must not mean reaching wider."""
+    result = generate_multi_from_sgraph(two_repository_model(), level=3,
+                                        transitive_externals=True)
+
+    versions = {sbom['metadata']['component']['bom-ref']: component_versions(sbom, 'onward')
+                for sbom in result}
+    assert sorted(versions.values()) == [['1.0.0'], ['2.0.0']]
+
+
+def test_a_selected_directory_element_follows_its_repositorys_edges_too():
+    """The element-path entry point derives its level from the path, so it takes the same rule."""
+    sbom = generate_for_element_from_sgraph(two_repository_model(), '/Org/repoA/src',
+                                            transitive_externals=True)
+
+    assert component_versions(sbom, 'onward') == ['1.0.0']
+
+
+def test_a_scope_below_the_subtree_is_followed():
+    """A subtree wide enough to contain the declaring scope contains its edges as well.
+
+    The whole-project document is this case: every repository's lockfile lies within it, and
+    nothing there is a sibling's.
+    """
+    model = two_repository_model(scope_a='/Org/repoA/frontend', scope_b='/Org/repoB')
+
+    result = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'repoA'), 'onward') == ['1.0.0']
+
+
+def test_a_sibling_directory_scope_is_not_followed():
+    """Two lockfiles in one repository govern their own directories, not each other's."""
+    model = two_repository_model(scope_a='/Org/repoA/frontend', scope_b='/Org/repoB')
+    result = generate_multi_from_sgraph(model, level=3, transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'src'), 'onward') == []
+
+
+def test_an_audit_declared_edge_takes_the_same_rule():
+    """npm audit produces the package-to-package edges that exist on models today.
+
+    Its deptype is 'packagejson' and its edges land on the same project-wide elements, so a
+    filter that covered only the lockfile analyzer's deptype would leave the contamination in
+    place on every model a customer already has.
+    """
+    result = generate_multi_from_sgraph(two_repository_model(deptype='packagejson'), level=2,
+                                        transitive_externals=True)
+
+    assert component_versions(sbom_of(result, 'repoA'), 'onward') == ['1.0.0']
+    assert component_versions(sbom_of(result, 'repoB'), 'onward') == ['2.0.0']
+
+
+def test_a_declaring_scope_changes_nothing_without_the_closure_flag():
+    """The default document never walked package-to-package edges and still does not."""
+    result = generate_multi_from_sgraph(two_repository_model(), level=2)
+
+    assert component_names(result, 'repoA') == ['shared']
+
+
+def test_cli_supports_the_external_closure_flags(tmp_path):
+    """--transitive-externals and --max-depth reach the generator through the CLI.
+
+    The multi fixture carries no External -> External package edges, so the flag adds no
+    component here: what it does add is the depth property on every direct one, which is
+    exactly the evidence that the option was wired through rather than silently dropped.
+
+    Depth is a claim about the 3rd-party closure and is checked only there. An inlined internal
+    component is an element of the estate, not a package hop away from it, so it carries no
+    depth — asserted below rather than merely skipped, because silently excluding a component
+    class from an invariant is how a real gap hides inside a passing test.
+    """
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    out_path = tmp_path / 'sboms.json'
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(out_path), '--level', '3', '--transitive-externals', '--max-depth', '2'],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    result = json.loads(out_path.read_text())
+    components = sbom_of(result, 'repoA')['components']
+    third_party = [c for c in components if find_property(c, 'softagram:internal') is None]
+    internal = [c for c in components if find_property(c, 'softagram:internal') == 'true']
+    assert third_party
+    assert all(find_property(c, 'dependencyDepth') == '1' for c in third_party)
+    assert all(find_property(c, 'dependencyDepth') is None for c in internal)
+
+
+def test_cli_rejects_the_external_closure_flag_without_a_scope(tmp_path):
+    """--transitive-externals is meaningless in the legacy single-SBOM mode, which ignores it."""
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(tmp_path / 'out.json'), '--transitive-externals'],
+        capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert '--transitive-externals requires --level' in proc.stderr
+
+
+# --- Package identity of internal components ---
+#
+# A component describing an internal element used to be named after the ELEMENT — the repository
+# or directory — with no version and no purl. A consumer then saw a row named after a repository
+# where it expected the package that repository publishes, and had no identifier to resolve.
+#
+# The identity is read from an ecosystem-neutral triple stamped on the package element, never
+# from the npm-specific file-level attribute: the same problem exists in pip, NuGet, Maven, Dart
+# and Go, and one converter serves all of them.
+
+
+def internal_package_element(model, path, name, version, ecosystem='npm'):
+    """Stamp the identity triple the analyzers write onto a package element."""
+    elem = model.createOrGetElementFromPath(path)
+    elem.attrs['package_name'] = name
+    elem.attrs['version'] = version
+    if ecosystem is not None:
+        elem.attrs['ecosystem'] = ecosystem
+    return elem
+
+
+def published_package_model(name='ui-lib', version='2.1.0', ecosystem='npm'):
+    """repoA declaring a dependency on repoB, which publishes itself as an internal package."""
+    model = SGraph(SElement(None, ''))
+    model.createOrGetElementFromPath('/Org/repoB').attrs['repo_url'] = \
+        'https://example.org/org/repoB.git'
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    published = internal_package_element(
+        model, f'/Org/repoB/package.json/{name}', name, version, ecosystem)
+    SElementAssociation(app, published, 'packagejson').initElems()
+    return model
+
+
+def internal_components(sbom):
+    return [c for c in sbom['components'] if find_property(c, 'softagram:internal') == 'true']
+
+
+def the_internal_component(model, **kwargs):
+    """The single inlined internal component of repoA's document."""
+    result = generate_multi_from_sgraph(model, level=2, transitive=True, **kwargs)
+    components = internal_components(sbom_of(result, 'repoA'))
+    assert len(components) == 1, components
+    return components[0]
+
+
+def test_an_inlined_internal_component_carries_its_package_identity():
+    """The component names the package the element publishes, not the element."""
+    component = the_internal_component(published_package_model())
+
+    assert component['name'] == 'ui-lib'
+    assert component['version'] == '2.1.0'
+    assert component['purl'] == 'pkg:generic/ui-lib@2.1.0'
+    assert find_property(component, 'softagram:packageEcosystem') == 'npm'
+    assert find_property(component, 'softagram:packageName') == 'ui-lib'
+
+
+def test_publishing_an_identity_does_not_displace_what_the_component_already_said():
+    """The element's own facts survive the identity: they answer a different question.
+
+    The purl says which package this is; the location, the repository and the BOM-Link say where
+    it lives and where its own document is. A consumer tracing an exposure path needs both, and
+    the bom-ref must not move either — the dependency graph and the BOM-Links of every other
+    document name the element by it.
+    """
+    component = the_internal_component(published_package_model())
+
+    assert component['bom-ref'] == slugify_bom_ref('repoB')
+    assert find_property(component, 'softagram:internal') == 'true'
+    assert find_property(component, 'softagram:elementPath') == '/Org/repoB'
+    assert component['externalReferences'] == [
+        {'url': component['externalReferences'][0]['url'], 'type': 'bom'},
+        {'url': 'https://example.org/org/repoB.git', 'type': 'vcs'},
+    ]
+    assert component['externalReferences'][0]['url'].startswith('urn:cdx:')
+
+
+def test_an_internal_package_is_not_claimed_to_be_a_public_registry_package():
+    """The purl type is 'generic', never the ecosystem's own type.
+
+    pkg:npm/<name>@<v> asserts an identity in the public npm registry. Either the name is not
+    published there, in which case the npm type buys nothing, or it is and belongs to someone
+    else, in which case this component silently inherits a stranger's advisories — a
+    dependency-confusion-shaped false positive. 'generic' is the purl type with no default
+    package repository, which is what an internally published package is. The module already
+    applies this reasoning to an in-house binary mistyped as a NuGet package.
+    """
+    component = the_internal_component(published_package_model())
+
+    assert not component['purl'].startswith('pkg:npm/')
+    assert component['purl'].startswith('pkg:generic/')
+
+
+def test_the_identity_is_ecosystem_neutral():
+    """A pip package resolves through exactly the same path, with no npm-shaped branch.
+
+    The triple is read, not the ecosystem: the day an internal pip or NuGet package carries it,
+    this works unchanged. The ecosystem is published as a property and never decides the purl
+    type — which is why this component's purl is generic too, not pypi.
+    """
+    component = the_internal_component(
+        published_package_model(name='shared-utils', version='0.4.1', ecosystem='pypi'))
+
+    assert component['purl'] == 'pkg:generic/shared-utils@0.4.1'
+    assert find_property(component, 'softagram:packageEcosystem') == 'pypi'
+
+
+def test_an_element_that_publishes_no_package_keeps_the_element_name():
+    """No identity in the subtree leaves the component exactly as it was."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    used = model.createOrGetElementFromPath('/Org/repoB/src/util.js')
+    SElementAssociation(app, used, 'use').initElems()
+
+    component = the_internal_component(model)
+
+    assert component['name'] == 'repoB'
+    assert component['version'] == ''
+    assert component['purl'] == ''
+    assert find_property(component, 'softagram:packageEcosystem') is None
+
+
+def test_a_model_predating_the_identity_triple_is_untouched():
+    """npm_package_name alone is an OLD model and must keep today's behaviour exactly.
+
+    That attribute is a long-standing npm-only convention stamped on the package.json FILE
+    element, with its own existing consumers. Every model stored before the analyzer half shipped
+    carries it and carries no triple, so reading it would silently rewrite the output of every
+    such model — the regression this lock exists to catch.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    package_json = model.createOrGetElementFromPath('/Org/repoB/package.json')
+    package_json.attrs['npm_package_name'] = 'ui-lib'
+    legacy = model.createOrGetElementFromPath('/Org/repoB/package.json/ui-lib')
+    SElementAssociation(app, legacy, 'packagejson').initElems()
+
+    component = the_internal_component(model)
+
+    assert component['name'] == 'repoB'
+    assert component['version'] == ''
+    assert component['purl'] == ''
+
+
+def test_an_ambiguous_multi_package_repository_falls_back_to_the_element_name():
+    """Two published packages and nothing to choose between them: no identity is invented.
+
+    A monorepo publishing several packages has no single identity, and picking one would
+    attribute the whole element to an arbitrary member of the set. Saying nothing is the honest
+    answer, and it is also the old behaviour, so ambiguity costs a consumer nothing it had.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    used = model.createOrGetElementFromPath('/Org/repoB/src/util.js')
+    SElementAssociation(app, used, 'use').initElems()
+    internal_package_element(model, '/Org/repoB/packages/ui/package.json/ui-lib', 'ui-lib', '2.1.0')
+    internal_package_element(model, '/Org/repoB/packages/api/package.json/api-lib', 'api-lib',
+                             '1.0.0')
+
+    component = the_internal_component(model)
+
+    assert component['name'] == 'repoB'
+    assert component['purl'] == ''
+
+
+def test_the_package_actually_depended_upon_resolves_the_ambiguity():
+    """Among several published packages, the one something OUTSIDE the element points at wins.
+
+    That is the package this dependency edge is about. An incoming association from inside the
+    element is one sibling package using another and says nothing about which package the
+    depending element resolved, so it deliberately does not count.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    depended_upon = internal_package_element(
+        model, '/Org/repoB/packages/ui/package.json/ui-lib', 'ui-lib', '2.1.0')
+    internal_only = internal_package_element(
+        model, '/Org/repoB/packages/tooling/package.json/build-tools', 'build-tools', '1.0.0')
+    sibling = model.createOrGetElementFromPath('/Org/repoB/packages/ui/src/index.js')
+    SElementAssociation(app, depended_upon, 'packagejson').initElems()
+    SElementAssociation(sibling, internal_only, 'packagejson').initElems()
+
+    component = the_internal_component(model)
+
+    assert component['name'] == 'ui-lib'
+    assert component['purl'] == 'pkg:generic/ui-lib@2.1.0'
+
+
+def test_no_component_of_any_document_has_an_empty_purl():
+    """Estate invariant: on a model that carries identity, every component is resolvable.
+
+    An empty purl is not a harmless blank — it is a row a consumer cannot match against anything,
+    which is what an internal dependency looked like before it had an identity. The metadata
+    component is excluded on purpose: it describes the document's own subject rather than a
+    dependency of it, and it stays empty by its own separate rule.
+    """
+    model = published_package_model()
+    third_party = model.createOrGetElementFromPath(
+        '/Org/External/NPM/left-pad/left-pad of version 1.3.0')
+    third_party.attrs['version'] = '1.3.0'
+    SElementAssociation(model.findElementFromPath('/Org/repoA/src/app.js'), third_party,
+                        'packagejson').initElems()
+
+    for kwargs in (dict(), dict(transitive=True), dict(transitive=True,
+                                                       transitive_externals=True)):
+        for sbom in generate_multi_from_sgraph(model, level=2, **kwargs):
+            for component in sbom['components']:
+                assert component['purl'], (kwargs, component['name'])
 
 
 # --- Selected-element SBOM tests ---

@@ -929,31 +929,481 @@ def generate_from_sgraph(sgraph: SGraph):
     return sbom.as_cyclonedx_json()
 
 
-def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_by_name):
-    """Walk all descendants of subtree_root and collect External dependencies as BOM components.
-    Uses the ORIGINAL (non-generalized) model so version info is preserved."""
+# A manifest-declared edge's deptype names the manifest that declared it, and a declaration made
+# in a development-only section carries the reserved 'dev_' prefix on that same name. So the
+# prefix qualifies an edge, it does not name a different kind of edge, and a consumer that
+# matches on the literal deptype silently loses every development declaration.
+def deptype_base(deptype):
+    """The deptype with the reserved development prefix removed.
+
+    Only 'dev_' is stripped, separator included: 'development' is a deptype in its own right, not
+    a prefixed one, and a prefix test without the separator would rewrite it into 'elopment'.
+    """
+    return deptype[len('dev_'):] if deptype.startswith('dev_') else deptype
+
+
+# The deptype bases that mean "this package depends on that package", and are therefore the only
+# edges the External -> External closure may follow.
+#
+# An allow-list rather than "follow every edge between two externals", because the External
+# subtree also holds code-level edges — a symbol in one external referencing a symbol in another,
+# recorded by the language analyzers with deptypes like 'inherits' or 'use'. Those describe how
+# code is written, not what a manifest declares, and following them would fill the BOM with
+# packages the project never depends on. A dependency a consumer cannot act on is worse than an
+# absent one: it sends someone to patch a package that is not there.
+#
+# Stated as bases, so deptype_base is what a caller matches against and a development-section
+# declaration traverses exactly like a production one. Whether such a package should then be
+# scoped differently in the BOM is a separate question this registry does not answer.
+#
+# How much data stands behind each entry differs sharply, and the difference matters before a
+# green test suite is read as evidence about real models. Measured across the stored model
+# corpus, 'packagejson' — written by the npm audit analyzer — and 'package_reference' — written
+# by the .NET analyzer — carry every External -> External edge that exists. 'pip' is emitted by
+# the pip lockfile analyzer but resolves no package-to-package edge in that corpus yet, and
+# 'packagelock' is emitted by an analyzer shipping alongside this converter, so neither is
+# exercised by stored data today.
+#
+# 'pubspec' is anticipatory, deliberately kept. A deptype here names the MANIFEST that declared
+# the edge, and the same name covers both the file -> package edge and the package -> package
+# one: 'packagejson' is written by the manifest analyzer for the first and by the audit analyzer
+# for the second. So when Dart's resolved closure is stored it arrives under this same name, and
+# a missing entry fails silently — the closure comes back empty with nothing to say why. An
+# unused entry cannot fail the opposite way, because the closure only follows edges whose SOURCE
+# is already an external: a manifest file's own 'pubspec' edges never reach this test.
+#
+# 'nuget' is the weakest entry: unlike the others it names an installer rather than a manifest,
+# and no analyzer emits it as a deptype at all — the .NET analyzer writes 'package_reference'.
+# It is left in place because removing an entry can only lose edges, never gain wrong ones, but
+# it is the one entry here with no emitter to point at.
+PACKAGE_DEPENDENCY_DEPTYPES = {
+    'packagelock',
+    'packagejson',
+    'pip',
+    'nuget',
+    'package_reference',
+    'pubspec',
+}
+
+# How many package hops separate a component from the analyzed code: 1 for a package the code
+# itself declares, 2 for one that package pulls in, and so on. Emitted only when the closure was
+# actually walked, so its absence means the BOM makes no depth claim rather than "everything here
+# is direct" — see _collect_3rdparty_for_subtree.
+DEPENDENCY_DEPTH_PROPERTY = 'dependencyDepth'
+
+# Where a package-to-package edge was declared, as the model path of the directory whose manifest
+# declared it, and the separator joining several such paths. The External subtree is project-wide:
+# every repository's resolved tree lands in the same External/<ecosystem> elements and shares the
+# versioned ones, so an edge on its own says nothing about which repository put it there. Written
+# by the analyzers; the spelling has to match theirs.
+DECLARING_SCOPE_ATTRIBUTE = 'declared_in'
+DECLARING_SCOPE_SEPARATOR = '//'
+
+
+def _declared_within_reach(assoc, subtree_path):
+    """Whether an edge's declaring scope and the subtree being collected are on the same line.
+
+    Followed when the scope IS the subtree, an ancestor of it, or a descendant of it. Ancestor
+    matters because a lockfile sits at a repository root while a directory-level document is
+    rooted below it; descendant matters because a whole-project document contains every
+    repository's lockfile. A plain "scope is under the subtree" test would empty the closure of
+    every directory-level document, turning the flag into a no-op at exactly the granularity
+    that is otherwise the expensive one.
+
+    NO declaring scope means TRAVERSE, not skip. Every model stored before the attribute existed
+    carries none, and the pip and NuGet analyzers still record none; reading absence as "skip"
+    would silently empty those closures, which is a worse failure than the cross-repository
+    contamination the attribute removes. Absence is unknown provenance, and unknown provenance
+    keeps the behaviour that was there before.
+    """
+    declared = assoc.attrs.get(DECLARING_SCOPE_ATTRIBUTE)
+    if not declared or not isinstance(declared, str):
+        return True
+    for scope in declared.split(DECLARING_SCOPE_SEPARATOR):
+        if scope == subtree_path or subtree_path.startswith(scope + '/') \
+                or scope.startswith(subtree_path + '/'):
+            return True
+    return False
+
+
+def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_by_name,
+                                  transitive_externals=False, max_depth=None):
+    """Collect the External dependencies of a subtree as BOM components.
+
+    Two stages. The first walks the descendants of subtree_root and collects the externals they
+    point at — the packages the analyzed code itself declares, at depth 1. The second, run only
+    when transitive_externals is set, continues from those across External -> External
+    associations, so the resolved closure a lockfile declares reaches the BOM too. Without it a
+    package that only another package depends on is invisible here, however many such edges the
+    model holds.
+
+    The second stage follows ASSOCIATIONS ONLY, never element children. Findings — vulnerabilities
+    and deprecations — are stored as children of versioned external elements, and a versioned
+    element is itself a child of its package element, so a child-descending walk would emit
+    findings and unreferenced sibling versions as though they were packages the project depends
+    on.
+
+    Uses the ORIGINAL (non-generalized) model so version info is preserved.
+
+    :param transitive_externals: follow External -> External package edges (opt-in: the closure
+        multiplies component counts, and the default output must stay what it was)
+    :param max_depth: deepest depth to emit, or None for the whole closure
+    :return: (components, edges, direct_refs) where edges are (from_bom_ref, to_bom_ref) pairs of
+        the External -> External hops actually followed, and direct_refs the bom-refs of the
+        packages the subtree itself declares. The callers build the dependency graph from the
+        two: a hop becomes an entry of its own, and direct_refs is what keeps a declared package
+        under the element even when some other package pulls it in as well.
+    """
     if external_root is None:
-        return []
+        return [], [], []
+
     components = []
-    seen_refs = set()
+    # dedup key -> the bom-ref spelling that survived under it, and element -> that same ref, so
+    # an element met twice is described once and always by the surviving spelling.
+    surviving_ref_by_key = {}
+    ref_by_element = {}
+    edges = []
+    seen_edges = set()
+
+    def emit(elem, depth):
+        """Describe an external once, and report the bom-ref under which it is known here."""
+        if elem in ref_by_element:
+            return ref_by_element[elem]
+        ref = None
+        for component in elem_as_bom_data(elem, other_externals_by_name, external_root):
+            key = dedup_key(component['bom-ref'])
+            if key in surviving_ref_by_key:
+                ref = surviving_ref_by_key[key]
+                continue
+            surviving_ref_by_key[key] = component['bom-ref']
+            # Depth is published only in closure mode. Tagging depth 1 unconditionally would
+            # change every existing default-mode BOM, which is exactly what the opt-in exists to
+            # prevent; tagging nothing at depth 1 in closure mode would leave a consumer reading
+            # an absent property as if it meant "direct". So: all components or none.
+            if transitive_externals:
+                component.setdefault('properties', []).append({
+                    'name': DEPENDENCY_DEPTH_PROPERTY,
+                    'value': str(depth)
+                })
+            components.append(component)
+            ref = component['bom-ref']
+        if ref is not None:
+            ref_by_element[elem] = ref
+        return ref
+
+    def is_external(elem):
+        return elem.isDescendantOf(external_root) or elem == external_root
+
+    direct_externals = []
+    seen_direct = set()
+    direct_refs = []
+    seen_direct_refs = set()
     stack = [subtree_root]
     while stack:
         elem = stack.pop(0)
         for assoc in elem.outgoing:
             target = assoc.toElement
-            if target.isDescendantOf(external_root) or target == external_root:
-                for component in elem_as_bom_data(target, other_externals_by_name, external_root):
-                    key = dedup_key(component['bom-ref'])
-                    if key not in seen_refs:
-                        seen_refs.add(key)
-                        components.append(component)
+            if is_external(target):
+                ref = emit(target, 1)
+                if ref is not None and ref not in seen_direct_refs:
+                    seen_direct_refs.add(ref)
+                    direct_refs.append(ref)
+                # Seeded whether or not it yielded a component: an unversioned package element
+                # describes nothing itself, yet still carries the edges to what it resolves to.
+                if target not in seen_direct:
+                    seen_direct.add(target)
+                    direct_externals.append(target)
         stack += elem.children
-    return components
+
+    if not transitive_externals:
+        return components, edges, direct_refs
+
+    # Breadth-first, so the depth first recorded for a package is the shortest route to it — the
+    # same first-wins rule deduplication uses, and what keeps a cycle from deepening forever.
+    subtree_path = subtree_root.getPath()
+    visited = set(direct_externals)
+    frontier = [(elem, 1) for elem in direct_externals]
+    # What the closure declined to follow, for the report below.
+    skipped_deptypes = set()
+    skipped_edges = 0
+    followed_any = False
+    while frontier:
+        elem, depth = frontier.pop(0)
+        if max_depth is not None and depth >= max_depth:
+            continue
+        for assoc in elem.outgoing:
+            base = deptype_base(assoc.deptype)
+            if base not in PACKAGE_DEPENDENCY_DEPTYPES:
+                # Recorded only for a target inside External: an edge from a package into the
+                # analyzed code is not a package relation anybody expected to follow, and
+                # counting it would drown the report in noise.
+                if is_external(assoc.toElement):
+                    skipped_deptypes.add(base)
+                    skipped_edges += 1
+                continue
+            if not _declared_within_reach(assoc, subtree_path):
+                continue
+            target = assoc.toElement
+            if not is_external(target):
+                continue
+            followed_any = True
+            target_ref = emit(target, depth + 1)
+            from_ref = ref_by_element.get(elem)
+            # An edge is recorded even when its target was already reached by a shorter route:
+            # the hop is real and a graph built from these pairs needs it. An endpoint that
+            # describes no component (an unversioned package element) has no ref to name, so
+            # that hop is traversed but not recorded.
+            if from_ref is not None and target_ref is not None:
+                edge = (from_ref, target_ref)
+                if edge not in seen_edges:
+                    seen_edges.add(edge)
+                    edges.append(edge)
+            if target not in visited:
+                visited.add(target)
+                frontier.append((target, depth + 1))
+
+    _report_unrecognized_package_edges(subtree_path, followed_any, skipped_deptypes,
+                                       skipped_edges)
+    return components, edges, direct_refs
+
+
+def _report_unrecognized_package_edges(subtree_path, followed_any, skipped_deptypes,
+                                       skipped_edges):
+    """Say so when the closure followed nothing while edges between externals were skipped.
+
+    A closure that reaches nothing produces a document identical to the default one, so on its
+    own it cannot be told apart from a model that simply holds no package-to-package edges. That
+    ambiguity is not hypothetical: this module's own registry carried a deptype no analyzer had
+    ever emitted, and nothing in the output said so.
+
+    Reported ONLY when nothing at all was followed. Externals also carry code-level edges — a
+    symbol in one referencing a symbol in another — which the allow-list exists to skip, so a
+    line per skipped edge would fire on nearly every model and teach a reader to ignore it. One
+    line in the one case where the reader has a question to ask is the whole point.
+    """
+    if followed_any or not skipped_deptypes:
+        return
+    sys.stderr.write(
+        f'Warning: the external dependency closure of {subtree_path} followed no edge, '
+        f'while {skipped_edges} edge(s) between external elements were skipped as non-package '
+        f'deptypes: {", ".join(sorted(skipped_deptypes))}\n')
+
+
+def _external_dependency_entries(edges):
+    """Turn External -> External hops into dependency graph entries, one per source package.
+
+    Entries follow the order the hops were recorded — breadth-first outward from the declared
+    dependencies — so the graph reads in the direction a consumer traces an exposure path, and
+    stays byte-stable between runs.
+
+    Hops are deduplicated again here even though the collector already does it per subtree: in
+    the internal closure the hops of several elements are concatenated, and two elements
+    depending on the same package see the same hop out of it.
+    """
+    depends_on_by_ref = {}
+    for from_ref, to_ref in edges:
+        depends_on = depends_on_by_ref.setdefault(from_ref, [])
+        if to_ref not in depends_on:
+            depends_on.append(to_ref)
+    return [{'ref': ref, 'dependsOn': depends_on}
+            for ref, depends_on in depends_on_by_ref.items()]
+
+
+def _externals_hanging_off_element(refs, direct_refs, edges):
+    """The external refs that belong in the element's own dependsOn.
+
+    A package the analyzed code declares stays here however else it is reachable. A manifest
+    declaration is a direct dependency, and another package happening to pull the same one in
+    does not make it less so.
+
+    A package reached only through another one moves under that other package instead. Listing
+    it here would tell a consumer the element depends on it directly, which contradicts the
+    dependencyDepth published on that very component and is exactly the claim the closure exists
+    to refine.
+
+    A package that no recorded hop names stays here too. An unversioned package element
+    describes no component of its own, yet still carries the hops out of it, so a hop through one
+    has no source ref to be recorded under. Its target is a real component either way, and a
+    component named by no entry is unreachable in a consumer's tree — worse than one attached a
+    level too shallow.
+
+    With no hops at all — every default-mode document — nothing is attached elsewhere and this
+    returns refs unchanged. The default path is that case of this rule, not a branch around it.
+    """
+    attached = {to_ref for _, to_ref in edges}
+    direct = set(direct_refs)
+    return [ref for ref in refs if ref in direct or ref not in attached]
+
+
+# The purl type of a package published INSIDE the analyzed estate. Deliberately 'generic' and
+# not the ecosystem's own type, whatever the ecosystem attribute says.
+#
+# pkg:npm/<name>@<v> asserts an identity in the public npm registry. Either that name is not
+# published there, in which case the npm type buys nothing over generic, or it is and belongs to
+# someone else, in which case this component silently inherits a stranger's advisories — the
+# dependency-confusion-shaped false positive FALLBACK_PURL_TYPE already exists to avoid for an
+# in-house binary mistyped as a NuGet package. Same reasoning, same answer: 'generic' is the only
+# registered purl type with no default package repository, which is exactly what an internally
+# published package is.
+#
+# One constant rather than a literal at the splice, so reversing this ruling is a one-line change
+# rather than a hunt through the module.
+INTERNAL_PACKAGE_PURL_TYPE = 'generic'
+
+# Ecosystem and name are published as properties because the purl no longer carries either: the
+# generic type erases the ecosystem, and a consumer that wants to know which registry the package
+# would live in must not have to guess it back out of the identifier. Prefixed like
+# 'softagram:internal' and 'softagram:via' on the same component, because all three state facts
+# read out of the model rather than descriptions this generator derived.
+PACKAGE_ECOSYSTEM_PROPERTY = 'softagram:packageEcosystem'
+PACKAGE_NAME_PROPERTY = 'softagram:packageName'
+
+
+def _package_identity_in_subtree(level_elem):
+    """The package a content element publishes, or None when that is not unambiguous.
+
+    Reads the ecosystem-neutral triple the analyzers stamp on a package element — 'package_name',
+    'version' and 'ecosystem' — and nothing else. Deliberately NOT 'npm_package_name': that is a
+    long-standing npm-only attribute stamped on the package.json FILE element with its own
+    existing consumers, and this converter serves pip, NuGet, Maven, Dart and Go, where the same
+    internal-package problem exists unchanged. Because the triple is neutral, an internal pip or
+    NuGet package resolves through this function the day it carries one — there is no npm branch
+    here and a second one must not be added.
+
+    The version is read through extract_version so a package element inherits the module's single
+    decoding rule; requiring the attribute itself is what keeps the search to elements the
+    analyzer actually stamped, rather than admitting every element whose NAME happens to carry a
+    version.
+
+    Ambiguity is answered with None, never with a guess. A monorepo publishing several packages
+    has no single identity, and naming the element after an arbitrary member of the set would be
+    a claim no consumer could check. None reproduces the pre-identity behaviour exactly, so an
+    ambiguous element costs a consumer nothing it had before.
+
+    :param level_elem: the content element an SBOM or an inlined component describes
+    :return: (ecosystem, name, version), with ecosystem None when the element does not name one,
+             or None when the subtree publishes no package or several indistinguishable ones.
+    """
+    candidates = []
+    stack = [level_elem]
+    while stack:
+        elem = stack.pop(0)
+        name = elem.attrs.get('package_name', '').strip()
+        if name and elem.attrs.get('version', '').strip():
+            version = extract_version(elem)
+            candidates.append((elem, elem.attrs.get('ecosystem', '').strip() or None, name,
+                               version))
+        stack += elem.children
+
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        # The package something OUTSIDE the element points at is the one this element is depended
+        # upon AS. An incoming association from inside is one sibling package using another, and
+        # says nothing about which package a depending element resolved.
+        depended_upon = [candidate for candidate in candidates
+                         if _has_incoming_from_outside(candidate[0], level_elem)]
+        if len(depended_upon) != 1:
+            return None
+        candidates = depended_upon
+
+    _, ecosystem, name, version = candidates[0]
+    return ecosystem, name, version
+
+
+def _has_incoming_from_outside(elem, level_elem):
+    """Whether anything outside level_elem's subtree points at elem."""
+    return any(not (assoc.fromElement == level_elem
+                    or assoc.fromElement.isDescendantOf(level_elem))
+               for assoc in elem.incoming)
+
+
+def _internal_element_component(bom_ref, elem, serial):
+    """A component describing an internal model element, inlined into another element's document.
+
+    Publishes the package the element itself publishes, when it publishes one unambiguously.
+    Before that, every such component was named after the ELEMENT — a repository or a directory —
+    with no version and no purl, so a consumer saw a row named after a repository where the
+    package belonged and had no identifier to resolve it by.
+
+    The identity does not displace what the component already said: the element's location, its
+    repository and the BOM-Link to its own document answer where this thing lives, which is a
+    different question from which package it is, and a consumer tracing an exposure path needs
+    both. The bom-ref stays the element's slug in particular — the dependency graph of this
+    document and the BOM-Links of every other one name the element by it.
+
+    :param serial: the 'urn:uuid:...' serial of the element's own standalone SBOM
+    """
+    component = {
+        'bom-ref': bom_ref,
+        'type': 'library',
+        'name': elem.name,
+        'version': '',
+        'purl': '',
+        'properties': [{'name': 'softagram:internal', 'value': 'true'}],
+        'externalReferences': [{
+            'url': f"urn:cdx:{serial.replace('urn:uuid:', '')}/1",
+            'type': 'bom'
+        }],
+    }
+    identity = _package_identity_in_subtree(elem)
+    if identity is not None:
+        ecosystem, name, version = identity
+        component['name'] = name
+        component['version'] = version
+        component['purl'] = f'pkg:{INTERNAL_PACKAGE_PURL_TYPE}/{name}@{version}'
+        component['properties'].append({'name': PACKAGE_NAME_PROPERTY, 'value': name})
+        # An element that names no ecosystem still has an identity: the ecosystem decides no part
+        # of the purl, so its absence omits one property rather than suppressing the package.
+        if ecosystem is not None:
+            component['properties'].append({
+                'name': PACKAGE_ECOSYSTEM_PROPERTY,
+                'value': ecosystem
+            })
+    _add_element_location(component, elem)
+    _add_vcs_reference(component, elem)
+    return component
+
+
+def _depth_property(component):
+    """The component's depth property dict, or None when it publishes no depth."""
+    for prop in component.get('properties', []):
+        if prop['name'] == DEPENDENCY_DEPTH_PROPERTY:
+            return prop
+    return None
+
+
+def _keep_the_shorter_depth(surviving, duplicate):
+    """Lower a surviving component's depth to a shorter route found through another element.
+
+    Each element of an inlined chain is walked breadth-first on its own, so within one walk the
+    first depth recorded is already the shortest. Across the merge it is not: the surviving
+    component is simply the first ENCOUNTERED, and traversal starts at the root, so a package the
+    root reaches at the end of a long chain kept that depth even when an inlined element declares
+    it outright.
+
+    That is not merely imprecise, it is self-contradictory: the dependency graph of the SAME
+    document keeps such a package under the element that declares it, so the document claimed a
+    direct dependency and a distance of three about one package. Only the property is lowered —
+    which component object survives, and the bom-ref every entry names, stay exactly as the merge
+    decided.
+
+    Absent on either side means no claim to compare: the depth property is published in closure
+    mode only, and there it is on every 3rd-party component, so this is a guard rather than a
+    case that arises.
+    """
+    surviving_depth = _depth_property(surviving)
+    duplicate_depth = _depth_property(duplicate)
+    if surviving_depth is None or duplicate_depth is None:
+        return
+    if int(duplicate_depth['value']) < int(surviving_depth['value']):
+        surviving_depth['value'] = duplicate_depth['value']
 
 
 def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_elem_by_path,
                                             elem_serials, elem_bom_refs, orig_external_root,
-                                            other_externals_by_name):
+                                            other_externals_by_name, transitive_externals=False,
+                                            max_depth=None):
     """Inline everything reachable from root_path into one self-contained BOM.
 
     Dependency-Track resolves dependency refs only within a single uploaded BOM: the BOM-Link
@@ -993,43 +1443,49 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
     components = []
     surviving_ref_by_key = {}
     external_refs_of = {}
+    external_edges = []
+
+    def surviving(ref):
+        """The spelling of ref that survived the cross-element merge."""
+        return surviving_ref_by_key[dedup_key(ref)]
+
+    surviving_component_by_key = {}
     for path in order:
         elem = orig_elem_by_path[path]
-        ext_components = _collect_3rdparty_for_subtree(elem, orig_external_root,
-                                                       other_externals_by_name)
+        ext_components, ext_edges, ext_direct = _collect_3rdparty_for_subtree(
+            elem, orig_external_root, other_externals_by_name, transitive_externals, max_depth)
         refs = []
         for component in ext_components:
             key = dedup_key(component['bom-ref'])
             if key not in surviving_ref_by_key:
                 surviving_ref_by_key[key] = component['bom-ref']
+                surviving_component_by_key[key] = component
                 if path != root_path:
                     component.setdefault('properties', []).append({
                         'name': 'softagram:via',
                         'value': elem.name
                     })
                 components.append(component)
+            else:
+                _keep_the_shorter_depth(surviving_component_by_key[key], component)
             refs.append(surviving_ref_by_key[key])
-        external_refs_of[path] = refs
+
+        # Both ends of a hop take the same canonicalization the refs above take. A hop is
+        # recorded per subtree, before the merge knows which spelling survives it, so an
+        # uncanonicalized endpoint would name a component the merge folded away.
+        hops = [(surviving(from_ref), surviving(to_ref)) for from_ref, to_ref in ext_edges]
+        external_edges += hops
+        external_refs_of[path] = _externals_hanging_off_element(
+            refs, [surviving(ref) for ref in ext_direct], hops)
 
     # Reachable internal elements become components of this BOM. They describe model elements,
     # so they publish their location and repository too: a consumer of one transitive BOM can
     # then place every link of the exposure chain in the tree, not only the element the BOM is
     # rooted at.
     for path in order[1:]:
-        serial_uuid = elem_serials[path].replace('urn:uuid:', '')
-        internal_elem = orig_elem_by_path[path]
-        internal_component = {
-            'bom-ref': elem_bom_refs[path],
-            'type': 'library',
-            'name': internal_elem.name,
-            'version': '',
-            'purl': '',
-            'properties': [{'name': 'softagram:internal', 'value': 'true'}],
-            'externalReferences': [{'url': f'urn:cdx:{serial_uuid}/1', 'type': 'bom'}],
-        }
-        _add_element_location(internal_component, internal_elem)
-        _add_vcs_reference(internal_component, internal_elem)
-        components.append(internal_component)
+        components.append(_internal_element_component(elem_bom_refs[path],
+                                                      orig_elem_by_path[path],
+                                                      elem_serials[path]))
 
     # Multi-entry dependency graph: every ref resolves within this BOM
     dependencies = []
@@ -1037,6 +1493,7 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
         depends_on = list(external_refs_of[path])
         depends_on += [elem_bom_refs[target] for target in direct_internal[path]]
         dependencies.append({'ref': elem_bom_refs[path], 'dependsOn': depends_on})
+    dependencies += _external_dependency_entries(external_edges)
 
     return components, dependencies
 
@@ -1119,7 +1576,8 @@ def _multi_sbom_context(sgraph, level):
     }
 
 
-def _sbom_for_content_element(orig_elem, ctx, transitive):
+def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=False,
+                              max_depth=None):
     """One CycloneDX SBOM dict for one content element of a level context."""
     sbom = SBOM()
     path = orig_elem.getPath()
@@ -1141,34 +1599,60 @@ def _sbom_for_content_element(orig_elem, ctx, transitive):
     if transitive:
         sbom.components, dependencies = _transitive_components_and_dependencies(
             path, ctx['gen_elem_by_path'], ctx['orig_elem_by_path'], ctx['elem_serials'],
-            ctx['elem_bom_refs'], ctx['orig_external_root'], ctx['other_externals_by_name']
+            ctx['elem_bom_refs'], ctx['orig_external_root'], ctx['other_externals_by_name'],
+            transitive_externals, max_depth
         )
     else:
         # 3rd party components from original model (preserves version info)
-        sbom.components = _collect_3rdparty_for_subtree(
-            orig_elem, ctx['orig_external_root'], ctx['other_externals_by_name']
+        sbom.components, external_edges, direct_external_refs = _collect_3rdparty_for_subtree(
+            orig_elem, ctx['orig_external_root'], ctx['other_externals_by_name'],
+            transitive_externals, max_depth
         )
 
         # Dependencies section
-        depends_on = []
+        # 3rd party purl refs, minus the ones a package-to-package hop attaches deeper down
+        depends_on = _externals_hanging_off_element(
+            [component['bom-ref'] for component in sbom.components], direct_external_refs,
+            external_edges)
 
-        # 3rd party purl refs
-        for component in sbom.components:
-            depends_on.append(component['bom-ref'])
-
-        # Internal cross-element dependencies from generalized model (BOM-Link URNs)
+        # Internal cross-element dependencies from the generalized model. The BOM-Link federates
+        # across documents for a consumer that follows it; the component is what a consumer that
+        # does NOT follow links across uploads can see at all, and without it a dependency that
+        # resolves inside the estate is invisible in practice.
+        #
+        # The component is emitted ONLY when the element publishes a package identity. Without
+        # one it would be a row named after a repository or a directory, with no version and no
+        # purl — the same shape the missing-identifier complaint was about — and since nothing in
+        # the released product stamps the identity attributes yet, EVERY such row on a model
+        # stored today would come out that way. So the default view stays exactly what it was
+        # until the element can carry real coordinates, and the consumer loses nothing it has.
+        #
+        # The transitive view deliberately does NOT take this rule: inlining internal elements is
+        # long-standing behaviour its consumers already receive, and suppressing rows there would
+        # remove a dependency they can see today. Identity improves those rows; its absence must
+        # not delete them.
         gen_elem = ctx['gen_elem_by_path'].get(path)
         if gen_elem is not None:
+            inlined_targets = set()
             for assoc in gen_elem.outgoing:
                 target_path = assoc.toElement.getPath()
-                if target_path in ctx['elem_serials'] and target_path != path:
-                    target_serial = ctx['elem_serials'][target_path].replace('urn:uuid:', '')
-                    target_ref = ctx['elem_bom_refs'][target_path]
-                    bom_link = f"urn:cdx:{target_serial}/1#{target_ref}"
-                    if bom_link not in depends_on:
-                        depends_on.append(bom_link)
+                if target_path not in ctx['elem_serials'] or target_path == path:
+                    continue
+                if target_path in inlined_targets:
+                    continue
+                inlined_targets.add(target_path)
+                target_serial = ctx['elem_serials'][target_path]
+                target_ref = ctx['elem_bom_refs'][target_path]
+                target_elem = ctx['orig_elem_by_path'][target_path]
+                if _package_identity_in_subtree(target_elem) is not None:
+                    sbom.components.append(_internal_element_component(
+                        target_ref, target_elem, target_serial))
+                    depends_on.append(target_ref)
+                depends_on.append(
+                    f"urn:cdx:{target_serial.replace('urn:uuid:', '')}/1#{target_ref}")
 
         dependencies = [{'ref': ref, 'dependsOn': depends_on}]
+        dependencies += _external_dependency_entries(external_edges)
 
     data = sbom.as_cyclonedx_json()
     data['serialNumber'] = serial
@@ -1176,8 +1660,9 @@ def _sbom_for_content_element(orig_elem, ctx, transitive):
     return data
 
 
-def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
-                               transitive: bool = False) -> list[dict]:
+def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3, transitive: bool = False,
+                               transitive_externals: bool = False,
+                               max_depth: int | None = None) -> list[dict]:
     """Generate one CycloneDX 1.7 SBOM per element at the given level.
 
     :param sgraph: The loaded SGraph model
@@ -1185,15 +1670,23 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3,
     :param transitive: Inline the transitive closure of internal dependencies into each SBOM
         so consumers that cannot follow BOM-Links across uploads (e.g. Dependency-Track) see
         the full exposure chain within one BOM
+    :param transitive_externals: Also follow External -> External package edges, so a package
+        reachable only through another package becomes a component tagged with its depth. Off by
+        default: the closure multiplies component counts on models that carry it, and every
+        existing consumer of the default output must keep receiving exactly what it received.
+    :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
+        for the whole closure
     :return: List of CycloneDX SBOM dicts
     """
     ctx = _multi_sbom_context(sgraph, level)
-    return [_sbom_for_content_element(orig_elem, ctx, transitive)
+    return [_sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth)
             for orig_elem in ctx['orig_content_elements']]
 
 
 def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
-                                     transitive: bool = False) -> dict:
+                                     transitive: bool = False,
+                                     transitive_externals: bool = False,
+                                     max_depth: int | None = None) -> dict:
     """Generate one CycloneDX 1.7 SBOM for the element at the given path.
 
     The element (typically /Project/repo or /Project/repo/dir) becomes the SBOM's metadata
@@ -1205,6 +1698,12 @@ def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
     :param sgraph: The loaded SGraph model
     :param element_path: Path of the element to root the SBOM at
     :param transitive: Inline the transitive closure of internal dependencies
+    :param transitive_externals: Also follow External -> External package edges, so a package
+        reachable only through another package becomes a component tagged with its depth. Off by
+        default: the closure multiplies component counts on models that carry it, and every
+        existing consumer of the default output must keep receiving exactly what it received.
+    :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
+        for the whole closure
     :return: One CycloneDX SBOM dict
     :raises ValueError: When no element exists at the path, or it is in the External subtree
     """
@@ -1224,7 +1723,7 @@ def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
         # not content to root an SBOM at.
         raise ValueError(f'Element at {path} is in the External subtree, not content')
 
-    return _sbom_for_content_element(orig_elem, ctx, transitive)
+    return _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth)
 
 
 if __name__ == '__main__':
@@ -1245,18 +1744,38 @@ if __name__ == '__main__':
                              'each SBOM so the full exposure chain resolves within one BOM '
                              '(for consumers like Dependency-Track that do not follow '
                              'BOM-Links across uploads). Requires --level or --element-path.')
+    parser.add_argument('--transitive-externals', action='store_true',
+                        help='Also follow package-to-package edges inside External, so a '
+                             'package reachable only through another package becomes a '
+                             'component tagged with its dependencyDepth. Requires --level or '
+                             '--element-path.')
+    parser.add_argument('--max-depth', type=int, default=None,
+                        help='Deepest dependency depth to emit with --transitive-externals. '
+                             'Without it the whole closure is emitted.')
     args = parser.parse_args()
 
     if args.transitive and args.level is None and args.element_path is None:
         parser.error('--transitive requires --level or --element-path')
 
+    # The legacy single-SBOM mode does not take either option, so accepting them there would
+    # produce output that silently ignores what was asked for.
+    if args.transitive_externals and args.level is None and args.element_path is None:
+        parser.error('--transitive-externals requires --level or --element-path')
+
+    if args.max_depth is not None and not args.transitive_externals:
+        parser.error('--max-depth requires --transitive-externals')
+
     g = SGraph.parse_xml_or_zipped_xml(args.model)
 
     if args.element_path is not None:
         result = generate_for_element_from_sgraph(g, args.element_path,
-                                                  transitive=args.transitive)
+                                                  transitive=args.transitive,
+                                                  transitive_externals=args.transitive_externals,
+                                                  max_depth=args.max_depth)
     elif args.level is not None:
-        result = generate_multi_from_sgraph(g, level=args.level, transitive=args.transitive)
+        result = generate_multi_from_sgraph(g, level=args.level, transitive=args.transitive,
+                                            transitive_externals=args.transitive_externals,
+                                            max_depth=args.max_depth)
     else:
         result = generate_from_sgraph(g)
 
