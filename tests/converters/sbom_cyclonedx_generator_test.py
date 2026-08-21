@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from sgraph import SElement, SElementAssociation, SGraph
 from sgraph.converters import sbom_cyclonedx_generator
 from sgraph.converters.sbom_cyclonedx_generator import (
@@ -477,11 +479,10 @@ def npm_chain_model(length, deptype='packagejson'):
 
     'packagejson' because that is what the package-to-package edges on stored models actually
     carry: the npm audit analyzer writes it, and it accounts for every npm External -> External
-    edge in the measured corpus. The default used to be 'packagelock', which no analyzer has yet
-    emitted anywhere — so eleven tests exercised the registry entry that carries no data while
-    removing the entry that carries all of it left the whole suite green. A fixture default is
-    the easiest place for that kind of gap to hide, which is why the deptypes below that are NOT
-    the common case are now spelled out at their call sites.
+    edge in the measured corpus. A fixture default is the easiest place for a coverage gap to
+    hide — every test that inherits it pins one registry entry and none of the others — so the
+    default is the deptype the data is in, and the deptypes that are NOT the common case are
+    spelled out at their call sites.
     """
     model = SGraph(SElement(None, ''))
     app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
@@ -564,8 +565,8 @@ def test_the_shortest_of_two_routes_is_the_depth_a_package_reports():
     """Two routes to one package, and the document publishes the shorter one.
 
     The walk is breadth-first exactly so that the first depth recorded for a package is its
-    shortest route, and until now nothing pinned that. A depth-first walk terminates on the same
-    cycles, emits the same components and passes the cycle test above — it differs only in the
+    shortest route. A depth-first walk terminates on the same cycles, emits the same components
+    and passes every other test in this file, the cycle one included — it differs only in the
     depth it publishes, which is the one thing a consumer reads to judge how far away a package
     is.
 
@@ -599,6 +600,23 @@ def test_max_depth_caps_the_closure_at_the_requested_level():
     assert component_names(result, 'repoA') == ['pkg1', 'pkg2']
 
 
+def test_a_max_depth_below_one_is_rejected_rather_than_silently_treated_as_one():
+    """A cap of zero excludes every component the walk could emit, so it cannot be meant.
+
+    Behaving as 1 instead answers a different question and says nothing about it, which is worse
+    than refusing, because the caller reads a document that looks like the one it asked for. Both
+    entry points check it — the caller that passes a cap read out of a request parameter is not
+    the CLI.
+    """
+    model = npm_chain_model(2)
+    for cap in (0, -1):
+        with pytest.raises(ValueError):
+            generate_multi_from_sgraph(model, level=2, transitive_externals=True, max_depth=cap)
+        with pytest.raises(ValueError):
+            generate_for_element_from_sgraph(model, '/Org/repoA', transitive_externals=True,
+                                             max_depth=cap)
+
+
 def test_a_finding_under_a_versioned_external_is_never_a_component():
     """Traversal follows associations only: the children of an external are not its dependencies.
 
@@ -615,7 +633,8 @@ def test_a_finding_under_a_versioned_external_is_never_a_component():
     'package_version' is not the 'version' key it reads, and across the models that carry
     findings not one of them passes. So against a faithful finding, valid_for_bom is what keeps
     a child-descending walk out of the BOM, the traversal rule is never consulted, and the test
-    passes while proving nothing. It did exactly that until this attribute was added.
+    passes while proving nothing. Drop the attribute and this test stops discriminating,
+    silently.
 
     The unreferenced sibling version covers the wider mistake instead: a walk that reached its
     element's PARENT's children — the 'elem.incoming + elem.parent.incoming' idiom this module
@@ -679,7 +698,7 @@ def test_an_empty_closure_names_the_deptypes_it_skipped(capsys):
     Both produce a document identical to the default one, so someone who enabled the option and
     saw nothing change cannot tell "the analyzers stored no closure" from "the closure is stored
     under a deptype this converter does not recognise". The second is not hypothetical: the
-    registry carried a deptype no analyzer emitted, and no output said so.
+    registry carries deptypes no analyzer emits.
     """
     model = npm_chain_model(2, deptype='inherits')
     generate_multi_from_sgraph(model, level=2, transitive_externals=True)
@@ -796,10 +815,10 @@ def test_a_package_an_inlined_element_declares_reports_the_shorter_depth():
 
     Constructed from the two modes together: the root reaches 'shared' only at the end of its own
     package chain, while the inlined element declares it outright. The cross-element merge keeps
-    the first component encountered, and traversal starts at the root, so the root's longer route
-    used to win the depth property — while the attachment logic correctly kept the package under
-    the element that declares it. The same document then said 'three hops away' and 'directly
-    depended upon' about the same package.
+    the first component encountered, and traversal starts at the root, so on its own the root's
+    longer route wins the depth property — while the attachment logic correctly keeps the package
+    under the element that declares it. The same document would then say 'three hops away' and
+    'directly depended upon' about the same package.
 
     The rule is the one already stated for a single walk: of several routes, the shortest is
     reported. Across the merge it has to be enforced rather than inherited, because there
@@ -1123,6 +1142,47 @@ def test_cli_supports_the_external_closure_flags(tmp_path):
     assert third_party
     assert all(find_property(c, 'dependencyDepth') == '1' for c in third_party)
     assert all(find_property(c, 'dependencyDepth') is None for c in internal)
+
+
+def test_cli_rejects_a_max_depth_below_one(tmp_path):
+    """The flag documents the deepest depth to emit, so a value below the shallowest is an error.
+
+    Reported by the CLI in its own vocabulary — the flag as typed — rather than letting the
+    generator's ValueError surface as a traceback.
+    """
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    for cap in ('0', '-1'):
+        proc = subprocess.run(
+            [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+             model_path, str(tmp_path / 'out.json'), '--level', '3', '--transitive-externals',
+             '--max-depth', cap],
+            capture_output=True, text=True)
+        assert proc.returncode != 0, cap
+        assert '--max-depth must be 1 or greater' in proc.stderr
+
+
+def test_cli_rejects_a_max_depth_without_the_closure_flag(tmp_path):
+    """A cap on a walk the default mode never makes would be accepted and ignored.
+
+    The guard is otherwise pinned by nothing: remove it and this test is the only one in the file
+    that fails, so without it the option could start silently doing nothing unnoticed.
+    """
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(tmp_path / 'out.json'), '--level', '3', '--max-depth', '2'],
+        capture_output=True, text=True)
+
+    assert proc.returncode != 0
+    assert '--max-depth requires --transitive-externals' in proc.stderr
 
 
 def test_cli_rejects_the_external_closure_flag_without_a_scope(tmp_path):

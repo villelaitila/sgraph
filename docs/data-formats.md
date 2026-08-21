@@ -268,11 +268,13 @@ python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json \
 ```
 
 Both options require `--level` or `--element-path`; the single-SBOM mode does not accept them.
-`--max-depth` requires `--transitive-externals`.
+`--max-depth` requires `--transitive-externals`, and must be 1 or greater: a smaller cap excludes
+every component the walk could emit, so it is refused rather than rounded up to the shallowest
+level.
 
 | Field | Meaning |
 |-------|---------|
-| `properties[dependencyDepth]` | Package hops between the component and the analyzed code: `1` for a package the code declares, `2` for one that package pulls in, and so on. When a package is reachable by several routes, the **shortest** is reported. |
+| `properties[dependencyDepth]` | Package hops between the component and the analyzed code: `1` for a package the code declares, `2` for one that package pulls in, and so on. When a package is reachable by several routes, the **shortest** is reported — including routes through the internal elements a `--transitive` document inlines, so the depth a component publishes always agrees with where the `dependencies` section of the same document places it. |
 
 - The property is present on **every** 3rd-party component of a `--transitive-externals`
   document, depth 1 included, and **absent from every component** of a default one. So an absent
@@ -283,9 +285,16 @@ Both options require `--level` or `--element-path`; the single-SBOM mode does no
 - A development-section declaration is followed exactly like a production one. Whether such a
   package should be scoped differently in the document is a separate question this option does
   not answer.
-- The option is **inert on a model that holds no package-to-package edges**: the components are
-  the same, only the depth property is added. What a document contains depends on what the
-  analyzers stored, not on the flag alone.
+- The option is **inert on a model that holds no package-to-package edges the converter
+  recognises**: the components are the same, only the depth property is added. What a document
+  contains depends on what the analyzers stored, not on the flag alone. The recognised deptypes
+  are the manifest and lockfile ones — `packagejson`, `packagelock`, `pip`, `package_reference`,
+  `nuget` and `pubspec`, each also in its `dev_`-prefixed form. Anything else between two
+  externals is skipped.
+- **An empty closure says so.** When a document follows no package-to-package edge at all while
+  edges between external elements were skipped for their deptype, one line naming those deptypes
+  is written to stderr. Otherwise an unrecognised deptype and a model with no closure at all
+  produce the same document, and nothing distinguishes them.
 
 #### Which repository's edges a document follows
 
