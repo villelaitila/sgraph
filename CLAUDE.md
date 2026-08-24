@@ -239,10 +239,36 @@ mc.printCompareInfos(compare_model)
 
 The `exclude_attrs` parameter accepts a set of attribute names to ignore during comparison. Use `SLIDING_WINDOW_ATTRS` as a preset to suppress time-windowed metric noise (author/commit/bug counts at various time windows).
 
+## Scratch Data and Temporary Files
+
+**Anything generated goes in `_git_ignored/`** — analysis models, `to_deps` dumps, comparison
+output, experiment data, one-off scripts. That directory is in `.gitignore`, so a broad `git add`
+cannot sweep it into a commit.
+
+Do not write scratch output into the repository root, `tests/`, or `docs/`. Three separate commits
+have captured generated files from those locations by accident, and each needed a history rewrite
+to undo: 42 MB of deps-format dumps as `tests/f1.txt` and `tests/f2.txt`, 207 KB of analysis models
+as `tests/converters/model.xml` and `model.xml.zip`, and `docs/example_deps.txt`. None of them was
+referenced by any test or script.
+
+Give one-off commands an explicit output path rather than relying on the working directory:
+
+```bash
+mkdir -p _git_ignored
+python3 -c "..." > _git_ignored/dump.txt
+```
+
+**Test fixtures are the opposite case** and must be committed. They live in `tests/` beside the
+test that reads them and are named for their purpose (`modelfile_for_sbom_tests.xml`), never
+`model.xml`. A test that reads an untracked file passes on the machine that produced it and fails
+on a fresh clone — `tests/converters/test_xml_to_hierarchical_json.py` carries a guard asserting
+its fixture is both in the index and in HEAD.
+
 ## File Locations
 
 - Source code: `src/sgraph/`
 - Tests: `tests/`
+- Scratch data (git-ignored): `_git_ignored/`
 - Automation scripts: `scripts/` (includes `release.py`)
 - Package metadata: `setup.cfg`, `setup.py`
 - Documentation: `README.md`, `releasing.md`, `CLAUDE.md`

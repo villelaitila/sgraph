@@ -1,3 +1,4 @@
+import copy
 import re
 
 import pytest
@@ -287,7 +288,7 @@ def test_the_transitive_view_still_inlines_an_internal_element_without_identity(
 
     inlined = internal_components(sbom_of(result, 'repoA'))
     assert [c['name'] for c in inlined] == ['repoB']
-    assert inlined[0]['purl'] == ''
+    assert 'purl' not in inlined[0]
 
 
 def test_the_third_party_components_are_untouched_by_internal_inlining():
@@ -1317,7 +1318,7 @@ def test_an_element_that_publishes_no_package_keeps_the_element_name():
 
     assert component['name'] == 'repoB'
     assert component['version'] == ''
-    assert component['purl'] == ''
+    assert 'purl' not in component
     assert find_property(component, 'softagram:packageEcosystem') is None
 
 
@@ -1340,7 +1341,7 @@ def test_a_model_predating_the_identity_triple_is_untouched():
 
     assert component['name'] == 'repoB'
     assert component['version'] == ''
-    assert component['purl'] == ''
+    assert 'purl' not in component
 
 
 def test_an_ambiguous_multi_package_repository_falls_back_to_the_element_name():
@@ -1361,7 +1362,7 @@ def test_an_ambiguous_multi_package_repository_falls_back_to_the_element_name():
     component = the_internal_component(model)
 
     assert component['name'] == 'repoB'
-    assert component['purl'] == ''
+    assert 'purl' not in component
 
 
 def test_the_package_actually_depended_upon_resolves_the_ambiguity():
@@ -1393,7 +1394,12 @@ def test_no_component_of_any_document_has_an_empty_purl():
     An empty purl is not a harmless blank — it is a row a consumer cannot match against anything,
     which is what an internal dependency looked like before it had an identity. The metadata
     component is excluded on purpose: it describes the document's own subject rather than a
-    dependency of it, and it stays empty by its own separate rule.
+    dependency of it, and it carries no purl at all by its own separate rule.
+
+    Absence and emptiness are different answers and only one of them is legal: CycloneDX types
+    purl as an iri-reference, which the empty string is not, so a row with nothing to say omits
+    the key. The disjunction is what makes this an invariant about EMPTINESS rather than about
+    presence — a component may say nothing, but it may not say nothing badly.
     """
     model = published_package_model()
     third_party = model.createOrGetElementFromPath(
@@ -1406,7 +1412,8 @@ def test_no_component_of_any_document_has_an_empty_purl():
                                                        transitive_externals=True)):
         for sbom in generate_multi_from_sgraph(model, level=2, **kwargs):
             for component in sbom['components']:
-                assert component['purl'], (kwargs, component['name'])
+                assert 'purl' not in component or component['purl'], (kwargs,
+                                                                      component['name'])
 
 
 # --- Selected-element SBOM tests ---
@@ -1584,14 +1591,20 @@ def test_purl_and_version_stay_empty_on_the_metadata_component():
     """Characterization: the metadata component has no package identity, and must not gain one.
 
     Guards against a later 'fill the empty field' edit putting the element path into purl, where
-    it would violate the purl grammar and be rejected by a purl-parsing consumer.
+    it would violate the purl grammar and be rejected by a purl-parsing consumer. The field is
+    now omitted rather than emitted empty, so that edit has no empty field to find — but the
+    guard still holds, because omission is not an invitation to populate it either.
+
+    version stays empty and is deliberately NOT given the same treatment: CycloneDX constrains
+    purl to an iri-reference and constrains version not at all, so the empty string is legal
+    there and removing it would change output for no stated reason.
     """
     model, _ = get_model_and_model_api(MULTI_MODEL)
     result = generate_multi_from_sgraph(model, level=3)
 
     assert len(result) == 2
     for sbom in result:
-        assert sbom['metadata']['component']['purl'] == ''
+        assert 'purl' not in sbom['metadata']['component']
         assert sbom['metadata']['component']['version'] == ''
 
 
@@ -1894,7 +1907,9 @@ def test_nupkg_referenced_binary_is_typed_as_nuget():
 def test_wheel_and_egg_referenced_binary_is_typed_as_pypi():
     """.whl and .egg both name the Python ecosystem, whose purl type prohibits a namespace."""
     component = get_binary_refs_components()['PyBinary']
-    assert component['purl'] == 'pkg:pypi/PyBinary@1.2'
+    # Folded by A4: pypi is case_sensitive false, so PyBinary and pybinary are one package and
+    # the published spelling is the folded one. The element's name still reads PyBinary.
+    assert component['purl'] == 'pkg:pypi/pybinary@1.2'
     assert purl_type_resolution(component) == 'inferred from referencing file extension: egg,whl'
 
 
@@ -2701,3 +2716,1014 @@ def test_no_property_value_is_ever_a_non_string(kwargs):
                  if not isinstance(value, str)]
 
     assert offenders == []
+
+
+# --- BOM admission tests ---
+#
+# What makes an external element a component at all. A licence, a hash and a URL are facts ABOUT
+# a package; none of them is evidence that the element carrying it IS one. The distinction is
+# invisible while no producer stamps those attributes on External elements — measured at zero on
+# both the stored corpus and the current analyzer set — and becomes a silent emission the day one
+# does, which is why it is pinned here rather than left to the first producer change to discover.
+
+
+def admission_components(model):
+    """The 3rd-party components of the legacy single-document mode.
+
+    The legacy walk descends into children, so it reaches every element under External including
+    a finding stored beneath a versioned package. That is what makes admission the only guard in
+    these tests: the association-following walk used by the multi modes would keep a finding out
+    by traversal alone, and a test written against it would pass while proving nothing.
+    """
+    return sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+
+
+def referenced_external(model, path):
+    """An external at path, referenced from the estate's own code so nothing else excludes it."""
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    elem = model.createOrGetElementFromPath(path)
+    SElementAssociation(app, elem, 'packagejson').initElems()
+    return elem
+
+
+def test_a_licence_alone_does_not_make_an_external_a_component():
+    """A licence is a fact about a package, not evidence that something is one.
+
+    The element here is what an analyzer records when it learns a licence but never resolves a
+    version. Admitting it publishes 'pkg:npm/lodash' — an identifier with no version — for an
+    element the model never claimed was an installed dependency.
+    """
+    model = SGraph(SElement(None, ''))
+    elem = referenced_external(model, '/Org/External/NPM/lodash')
+    elem.attrs['license'] = 'MIT'
+
+    assert [component['name'] for component in admission_components(model)] == []
+
+
+def test_a_licensed_versioned_external_still_carries_its_licence():
+    """Anti-vacuity: the guard removes an admission rule, not licence reporting.
+
+    Nothing else in this suite asserts the 'licenses' field at all, so without this test a change
+    that silently stopped emitting licences would stay green. The element is admitted on its
+    version, exactly as before, and its licence still reaches the document.
+    """
+    model = SGraph(SElement(None, ''))
+    elem = referenced_external(model, '/Org/External/NPM/lodash/lodash of version 4.17.21')
+    elem.attrs['version'] = '4.17.21'
+    elem.attrs['license'] = 'MIT'
+
+    components = admission_components(model)
+
+    assert len(components) == 1
+    assert components[0]['licenses'] == [{
+        'license': {
+            'id': 'MIT',
+            'url': 'https://spdx.org/licenses/MIT.html'
+        }
+    }]
+
+
+def test_a_licence_on_a_code_symbol_emits_nothing():
+    """The shape a producer stamping licences on the import graph would trip.
+
+    'Response' is a class reached through a 'ref' edge, not a package. Admitting it does not
+    merely publish a versionless component: the purl type falls back to 'generic', so the
+    document asserts a generic-ecosystem package named after a Python class.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.py')
+    symbol = model.createOrGetElementFromPath('/Org/External/Python/starlette/responses/Response')
+    symbol.attrs['license'] = 'BSD-3-Clause'
+    SElementAssociation(app, symbol, 'ref').initElems()
+
+    assert [component['purl'] for component in admission_components(model)] == []
+
+
+def test_a_hash_alone_does_not_admit_either():
+    """The same rule stated for the attribute a lockfile producer reaches for next.
+
+    An integrity hash identifies a file's contents, not a package. Neither name is read by
+    admission today, and this fails if either becomes a way back into the hole the licence
+    disjunct opened.
+    """
+    model = SGraph(SElement(None, ''))
+    elem = referenced_external(model, '/Org/External/NPM/lodash')
+    elem.attrs['hash'] = 'sha512-0000'
+    elem.attrs['integrity'] = 'sha512-0000'
+
+    assert [component['name'] for component in admission_components(model)] == []
+
+
+def test_a_licence_on_a_finding_node_emits_nothing():
+    """One guard, two hazards: the same rule keeps advisories out of the inventory.
+
+    Findings are stored as children of a versioned external, so the legacy walk reaches them. The
+    attributes here are the ones the npm audit analyzer actually writes, and none of them admits:
+    'package_version' is not the 'version' key admission reads. The licence is therefore the only
+    thing that could let this node through, which is what makes the test discriminate — drop it
+    and the assertion holds for a reason that has nothing to do with the guard.
+
+    Emitted, this node becomes a component named after the advisory itself, and an estate that
+    depends on one package would report two.
+    """
+    model = SGraph(SElement(None, ''))
+    versioned = referenced_external(model, '/Org/External/NPM/pkg2/pkg2 of version 2.0.0')
+    versioned.attrs['version'] = '2.0.0'
+    finding = SElement(versioned, 'pkg2_GHSA-0000-0000-0000')
+    finding.setType('vulnerability')
+    finding.attrs['package_name'] = 'pkg2'
+    finding.attrs['package_version'] = '2.0.0'
+    finding.attrs['range'] = '<2.1.0'
+    finding.attrs['license'] = 'MIT'
+
+    assert [component['name'] for component in admission_components(model)] == ['pkg2']
+
+
+# --- npm install-path identity repair tests (A1) ---
+#
+# The npm lockfile analyzers record a nested install as ONE element whose name is the whole
+# install path: 'wrap-ansi-cjs/strip-ansi'. Spliced into a purl unchanged that asserts a package
+# published nowhere. The leading segments are the dependency chain that REQUIRED the package and
+# the tail is the package itself, so the repair keeps the tail.
+#
+# Phase 0 refuted the opposite reading (repair to the leading @scope/pkg) on the version: across
+# the 21 deep-scoped ids the version matched the prefix package in 0 cases and the leaf in 6.
+# Repairing to the prefix would have kept the leaf's version against the prefix's name and
+# fabricated a pair neither reading asserts.
+
+
+def slash_named_external(model, root, raw_name, version=None, deptype='packagejson'):
+    """An external whose entire id lives in ONE element name, separators included.
+
+    SElement normalises '/' to '__slash__' on construction and clean_name decodes it back, so an
+    install path is a single element with a slash-bearing name rather than a chain of elements.
+    Built with SElement deliberately: createOrGetElementFromPath would split the id into a tree,
+    the cleaned name would hold no slash, and the repair would never see the shape it exists for.
+    """
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    parent = model.createOrGetElementFromPath(f'/Org/External/{root}')
+    elem = SElement(parent, raw_name)
+    if version is not None:
+        elem.attrs['version'] = version
+    SElementAssociation(app, elem, deptype).initElems()
+    return elem
+
+
+def repair_components(model):
+    """The 3rd-party components of the legacy single-document mode, in emission order."""
+    return sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+
+
+def one_component(root, raw_name, version):
+    """Emit a single slash-named external and return the one component describing it."""
+    model = SGraph(SElement(None, ''))
+    slash_named_external(model, root, raw_name, version)
+    components = repair_components(model)
+    assert len(components) == 1, components
+    return components[0]
+
+
+def test_the_nested_install_path_identity_is_a_recorded_migration():
+    """Records a published identifier that CHANGED, rather than pinning behaviour.
+
+    Before this phase the same element emitted 'pkg:npm/wrap-ansi-cjs/strip-ansi@6.0.1'; it now
+    emits 'pkg:npm/strip-ansi@6.0.1'. 87 refs across the 16 stored models move this way. The test
+    was written asserting the old value and updated in the commit that landed the repair, so a
+    consumer-visible migration appears in the diff of a test rather than only in a release note.
+
+    It pins no behaviour of its own — the tests below do that — and it is the one place to look
+    when asking what a resolver that cached the old identifier will no longer find.
+    """
+    assert one_component('NPM', 'wrap-ansi-cjs/strip-ansi',
+                         '6.0.1')['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+
+
+def test_an_install_path_resolves_to_its_leaf_package():
+    """'wrap-ansi-cjs/strip-ansi' is strip-ansi installed under wrap-ansi-cjs, not a package."""
+    assert one_component('NPM', 'wrap-ansi-cjs/strip-ansi',
+                         '6.0.1')['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+
+
+def test_a_deep_scoped_install_path_resolves_to_its_leaf():
+    """A leading @scope belongs to the REQUIRER, so it does not move identity to the prefix.
+
+    Phase 0 measured this one directly: the versions carried by these ids match the leaf package
+    and never the scoped prefix.
+    """
+    assert one_component('NPM', '@eslint/eslintrc/minimatch',
+                         '3.1.5')['purl'] == 'pkg:npm/minimatch@3.1.5'
+
+
+def test_a_scoped_tail_keeps_both_of_its_segments():
+    """When the tail is itself scoped, the package is the last TWO segments.
+
+    This id settles the rule without reference to any version measurement: an import subpath
+    cannot contain a second '@scope/' segment, so the string can only be an install path, and the
+    installed package can only be '@rollup/pluginutils'.
+    """
+    component = one_component('NPM', '@rollup/plugin-node-resolve/@rollup/pluginutils', '5.3.0')
+    assert component['purl'] == 'pkg:npm/%40rollup/pluginutils@5.3.0'
+
+
+def test_a_deep_scoped_id_is_not_repaired_to_its_scope():
+    """Tombstone for the reading Phase 0 refuted, kept because the refutation cost a full cycle.
+
+    The original rule repaired '@eslint/eslintrc/minimatch' to its scoped prefix. The
+    discriminator first used — 'is the prefix package emitted elsewhere?' — answered yes 21 times
+    out of 21 and confirmed nothing, because a nested install path's prefix is itself a real
+    installed package under BOTH readings. The version is what discriminates, and it matched the
+    prefix in 0 of 21 cases. Asserting the positive value as well as the refuted one, because a
+    bare inequality also passes for a third value that is wrong in some other way.
+    """
+    purl = one_component('NPM', '@eslint/eslintrc/minimatch', '3.1.5')['purl']
+    assert purl == 'pkg:npm/minimatch@3.1.5'
+    assert purl != 'pkg:npm/@eslint/eslintrc@3.1.5'
+
+
+def test_a_canonical_scoped_name_is_left_alone():
+    """'@babel/core' is a package name, not an install path: two segments and a leading @."""
+    assert one_component('NPM', '@babel/core', '7.24.0')['purl'] == 'pkg:npm/%40babel/core@7.24.0'
+
+
+def test_a_plain_package_name_is_left_alone():
+    """No separator, nothing to repair — the overwhelming majority of npm ids."""
+    assert one_component('NPM', 'lodash', '4.17.21')['purl'] == 'pkg:npm/lodash@4.17.21'
+
+
+def test_a_golang_module_path_keeps_every_segment():
+    """The control that matters most in this phase, and the only guard that can catch it.
+
+    A golang module path legitimately contains separators — the purl in this module's own
+    docstring is pkg:golang/github.com/0xAX/notificator — so a repair applied on the strength of
+    a slash alone would destroy every golang identity. The 16 stored models contain ZERO
+    slash-bearing external names outside npm, so a corpus sweep cannot detect that regression:
+    no non-npm purl would change because none has a separator to lose. This test is the guard.
+
+    Synthetic BY NECESSITY, not by convenience: no fixture drawn from a stored model can reach
+    this shape, because no model holds one. The module already reasons this way where the oci
+    purl type is asserted directly on cyclonedx_component_type rather than through a fixture, on
+    the stated grounds that no model can reach a purl the generator never builds and a fixture
+    that appeared to would be testing a hand-written string rather than this code.
+    """
+    component = one_component('Go', 'github.com/0xAX/notificator', '1.0.0')
+    assert component['purl'] == 'pkg:golang/github.com/0xAX/notificator@1.0.0'
+
+
+def test_a_pypi_name_containing_a_slash_is_not_repaired():
+    """The repair is npm-only, asserted on a name that would otherwise match the shape.
+
+    Written as ONE element named 'zope/interface' rather than as nested elements: nested elements
+    leave no slash in the cleaned name, the predicate would fail for a reason unrelated to the
+    ecosystem check, and the test would pass without exercising it.
+    """
+    assert one_component('PIP', 'zope/interface',
+                         '5.4.0')['purl'] == 'pkg:pypi/zope/interface@5.4.0'
+
+
+def test_a_versionless_npm_install_path_is_never_repaired():
+    """The only guard on the repair itself, on a real unversioned install path.
+
+    Not the only guard on emission: valid_for_bom blocks two further routes today, the
+    parent_version-only route and the 'versions' plural route, both of which compute a repair
+    that then emits nothing. That makes reason 3 below more important rather than less — the
+    repair must be gated where it happens, not where the current call path happens to stop it.
+
+    'wrap-ansi-cjs/strip-ansi' with no version is one of 363 unversioned slash-bearing npm ids
+    in the 16 stored models — the same id also occurs versioned elsewhere, which is why it is the
+    honest input here: the rule genuinely matches it, and only the gate stops the repair.
+
+    Three reasons the gate exists, none of them "an unversioned id is an import subpath":
+    1. Evidence. The tail-is-the-package rule was established by matching each element's version
+       against the leaf's and against the prefix's, 6/21 versus 0/21. An unversioned element
+       carries no such evidence, so a repair there asserts what cannot be falsified.
+    2. Benefit. An unversioned element emits no component at all, so repairing its name can
+       improve no purl. The gate is pure downside protection.
+    3. Forward-looking, and why it is an explicit gate rather than an accident of the call path.
+       If admission ever widens — a licence attribute, a stamped identity, any future criterion —
+       an ungated repair would emit versionless rows for packages named only by a requirer chain,
+       creating components from nothing. That is what invariant 2 forbids, enforced here.
+
+    Checked two ways because neither alone is honest: a truly versionless element is not admitted
+    to the BOM, so a document-level assertion about it would pass for reasons unrelated to this
+    gate, while the empty-version element is the one shape carrying a versionless id all the way
+    through emission.
+    """
+    # The rule WOULD repair this name. Without this line the assertions below could pass because
+    # the input never matched, which is the failure mode this whole phase is about.
+    assert sbom_cyclonedx_generator.repair_npm_package_name('wrap-ansi-cjs/strip-ansi') == (
+        'strip-ansi', 'install-path')
+
+    model = SGraph(SElement(None, ''))
+    versionless = slash_named_external(model, 'NPM', 'wrap-ansi-cjs/strip-ansi')
+    purl, repaired_name, _ = sbom_cyclonedx_generator.resolved_purl(versionless, '')
+    assert purl == 'pkg:npm/wrap-ansi-cjs/strip-ansi'
+    assert repaired_name is None
+
+    empty_version = SGraph(SElement(None, ''))
+    slash_named_external(empty_version, 'NPM', 'wrap-ansi-cjs/strip-ansi', '')
+    component = repair_components(empty_version)[0]
+    assert component['purl'] == 'pkg:npm/wrap-ansi-cjs/strip-ansi'
+    assert component['name'] == 'wrap-ansi-cjs/strip-ansi'
+
+
+def test_a_repaired_identity_records_its_provenance():
+    """A rewritten name must disclose what the model said, since the purl no longer carries it.
+
+    The property holds the original NAME rather than the original purl: the old purl is
+    reconstructible from name, type and version, and republishing a pkg:npm/... string invites a
+    consumer to resolve an identifier whose whole problem is that it denotes nothing.
+    """
+    component = one_component('NPM', 'wrap-ansi-cjs/strip-ansi', '6.0.1')
+    assert find_property(component, 'packageNameResolution') == ('repaired from install path: '
+                                                                 'wrap-ansi-cjs/strip-ansi')
+
+
+def test_a_repaired_component_takes_the_repaired_name():
+    """The name field follows the purl.
+
+    A repaired purl beside the raw name would have the document name a package it does not
+    identify, and the name is built outside resolved_purl, so it does not follow by itself.
+    """
+    assert one_component('NPM', 'wrap-ansi-cjs/strip-ansi', '6.0.1')['name'] == 'strip-ansi'
+
+
+def test_a_repair_that_collides_with_an_emitted_package_merges_into_one_row():
+    """Repairing to an identity already emitted folds the two rows, it does not duplicate them.
+
+    dedup_key keys on the bom-ref, so the repaired ref meets the existing one and one row
+    survives. This is why the phase pre-registers a DOCUMENT count that falls while the element
+    count does not move.
+    """
+    model = SGraph(SElement(None, ''))
+    slash_named_external(model, 'NPM', 'strip-ansi', '6.0.1')
+    slash_named_external(model, 'NPM', 'wrap-ansi-cjs/strip-ansi', '6.0.1')
+
+    components = repair_components(model)
+
+    assert [component['purl'] for component in components] == ['pkg:npm/strip-ansi@6.0.1']
+
+
+def test_the_repair_rule_as_a_unit_table():
+    """The rule as a pure function, including the shapes no stored model happens to contain.
+
+    'a/b/' is refused rather than normalised: an empty tail is a malformity the repair cannot
+    reason about, and inventing a reading for it is the defect this item removes. A doubled
+    separator with a usable tail is NOT refused — 'a//b' still installs 'b'.
+    """
+    repair = sbom_cyclonedx_generator.repair_npm_package_name
+    assert repair('wrap-ansi-cjs/strip-ansi') == ('strip-ansi', 'install-path')
+    assert repair('@scope/pkg/deep/path') == ('path', 'install-path')
+    assert repair('a/@scope/b') == ('@scope/b', 'install-path-scoped-leaf')
+    assert repair('a//b') == ('b', 'install-path')
+    assert repair('a/b/') is None
+    assert repair('a/@scope/') is None
+    assert repair('@a/b') is None
+    assert repair('@x') is None
+    assert repair('lodash') is None
+    assert repair('') is None
+
+
+# --- merge evidence tests (P2b) ---
+#
+# When two elements describe one package, dedup keeps the component it met first and discards the
+# other. The survivor is fixed by document order, which is a traversal artefact, so any rule
+# phrased as "the correct row survives" is unsound in both directions: the corpus produced the
+# repaired element as survivor, a code-built reproduction produced the plain one. The component
+# must therefore be the UNION of what both elements know.
+#
+# The count forces the plumbing. indirectExposurePaths is truncated to four segments, so the raw
+# elements cannot be recovered from the rendered string and no string-level merge can compute a
+# correct count. Components carry _evidence while they are collected and the render boundary
+# re-renders the three properties from it.
+
+
+def folding_pair_model(indirect_for_install_path=False):
+    """Two npm externals that emit one component: a package and an install path ending in it.
+
+    a.js reaches the package by its own name, b.js through the install path, so each element
+    holds a source reference the other lacks and the union is observable. With
+    indirect_for_install_path the install path also carries indirect exposure the plain element
+    has no route to, which is the shape that lost indirectExposureCount on the corpus.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+    b_file = model.createOrGetElementFromPath('/Org/repoA/src/b.js')
+    npm = model.createOrGetElementFromPath('/Org/External/NPM')
+    plain = SElement(npm, 'strip-ansi')
+    plain.attrs['version'] = '6.0.1'
+    install_path = SElement(npm, 'wrap-ansi-cjs/strip-ansi')
+    install_path.attrs['version'] = '6.0.1'
+    SElementAssociation(a_file, plain, 'packagejson').initElems()
+    SElementAssociation(b_file, install_path, 'packagejson').initElems()
+    if indirect_for_install_path:
+        util = model.createOrGetElementFromPath('/Org/repoA/src/util.js')
+        express = SElement(npm, 'express')
+        express.attrs['version'] = '4.18.2'
+        SElementAssociation(util, express, 'packagejson').initElems()
+        SElementAssociation(express, install_path, 'packagejson').initElems()
+    return model
+
+
+def nuget_case_fold_model():
+    """Two spellings of one case-insensitive NuGet id, each referenced by a different file.
+
+    Code-built rather than fixture-based for two reasons: the tracked emission fixture's NLog and
+    nlog elements carry no source references at all, so a test written against it would pass
+    before and after while proving nothing; and
+    test_the_emission_fixture_yields_fourteen_distinct_components pins that fixture's component
+    count, which makes edits to it load-bearing for tests unrelated to this one.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.cs')
+    b_file = model.createOrGetElementFromPath('/Org/repoB/src/b.cs')
+    assemblies = model.createOrGetElementFromPath('/Org/External/Assemblies')
+    upper = SElement(assemblies, 'NLog')
+    upper.attrs['version'] = '5.0.0'
+    lower = SElement(assemblies, 'nlog')
+    lower.attrs['version'] = '5.0.0'
+    SElementAssociation(a_file, upper, 'assembly_ref').initElems()
+    SElementAssociation(b_file, lower, 'assembly_ref').initElems()
+    # a.cs -> b.cs is what pulls repoB's subtree into repoA's transitive document. Without it the
+    # two spellings never meet and the cross-subtree fold this model exists for never happens.
+    SElementAssociation(a_file, b_file, 'use').initElems()
+    return model
+
+
+def only_component(model):
+    """The one 3rd-party component of the legacy document, failing if there is not exactly one."""
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    assert len(components) == 1, [c['purl'] for c in components]
+    return components[0]
+
+
+def test_a_merge_keeps_the_richer_exposure_data():
+    """The defect this phase exists to remove: a fold that discards the duplicate's evidence.
+
+    Measured on the corpus before the fix, seven of sixteen affected rows lost evidence, and on
+    two of them sourceCodeReferences survived as a NAME while its VALUE was emptied — 223 and 458
+    characters replaced by nothing. A check on property names alone would have called that a pass,
+    which is why this asserts values.
+    """
+    components = sbom_cyclonedx_generator.generate_from_sgraph(
+        folding_pair_model(indirect_for_install_path=True))['components']
+    component = [c for c in components if c['purl'] == 'pkg:npm/strip-ansi@6.0.1'][0]
+
+    assert find_property(component,
+                         'sourceCodeReferences') == '/Org/repoA/src/a.js;/Org/repoA/src/b.js'
+    assert find_property(component, 'indirectExposureCount') == '1'
+    assert find_property(component, 'indirectExposurePaths') == '/Org/repoA/src'
+
+
+def test_a_merge_unions_source_code_references():
+    """Both elements' direct references reach the surviving row, sorted and deduplicated.
+
+    The single-element path already deduplicates direct references by element, so the union
+    reproduces that rule across elements rather than inventing one.
+    """
+    component = only_component(folding_pair_model())
+
+    assert find_property(component,
+                         'sourceCodeReferences') == '/Org/repoA/src/a.js;/Org/repoA/src/b.js'
+
+
+def test_the_indirect_count_counts_distinct_exposed_elements_after_a_merge():
+    """The count is the cardinality of the union, never the sum — the anti-sum test.
+
+    produce_source_code_references builds indirect exposure as a set of ELEMENTS, so the number
+    means distinct exposed elements. Summing two elements' counts double-counts every element
+    exposed to both, and that overlap is largest exactly when a merge is most likely: the two
+    rows describe one package, so the code reaching them is usually the same code.
+    """
+    model = SGraph(SElement(None, ''))
+    util = model.createOrGetElementFromPath('/Org/repoA/src/util.js')
+    npm = model.createOrGetElementFromPath('/Org/External/NPM')
+    plain = SElement(npm, 'strip-ansi')
+    plain.attrs['version'] = '6.0.1'
+    install_path = SElement(npm, 'wrap-ansi-cjs/strip-ansi')
+    install_path.attrs['version'] = '6.0.1'
+    # util.js is exposed to BOTH elements, so a sum would count it twice; other.js reaches only
+    # the install path, so the union is strictly larger than either element's own evidence and
+    # the test fails both on a survivor-only implementation and on a summing one.
+    other = model.createOrGetElementFromPath('/Org/repoA/src/other.js')
+    for name, target in (('express', plain), ('chalk', install_path)):
+        package = SElement(npm, name)
+        package.attrs['version'] = '1.0.0'
+        SElementAssociation(util, package, 'packagejson').initElems()
+        SElementAssociation(package, target, 'packagejson').initElems()
+    only_install_path = SElement(npm, 'only-install-path')
+    only_install_path.attrs['version'] = '1.0.0'
+    SElementAssociation(other, only_install_path, 'packagejson').initElems()
+    SElementAssociation(only_install_path, install_path, 'packagejson').initElems()
+
+    component = [
+        c for c in sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+        if c['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+    ][0]
+
+    assert find_property(component, 'indirectExposureCount') == '2'
+
+
+def test_a_merge_does_not_deduplicate_abstracted_exposure_paths():
+    """The abstraction repeats a prefix reached twice, because the single-element path does.
+
+    indirectExposurePaths abstracts AFTER deduplicating elements and does not deduplicate the
+    abstracted strings, so two distinct exposed elements sharing a three-component prefix appear
+    twice. Pinned against a plausible tidy-up: making the merge deduplicate here would make the
+    merged row disagree with every unmerged one.
+    """
+    model = SGraph(SElement(None, ''))
+    npm = model.createOrGetElementFromPath('/Org/External/NPM')
+    plain = SElement(npm, 'strip-ansi')
+    plain.attrs['version'] = '6.0.1'
+    install_path = SElement(npm, 'wrap-ansi-cjs/strip-ansi')
+    install_path.attrs['version'] = '6.0.1'
+    for leaf, target in (('one.js', plain), ('two.js', install_path)):
+        internal = model.createOrGetElementFromPath(f'/Org/repoA/src/{leaf}')
+        package = SElement(npm, f'via-{leaf}')
+        package.attrs['version'] = '1.0.0'
+        SElementAssociation(internal, package, 'packagejson').initElems()
+        SElementAssociation(package, target, 'packagejson').initElems()
+
+    component = [
+        c for c in sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+        if c['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+    ][0]
+
+    assert find_property(component, 'indirectExposureCount') == '2'
+    assert find_property(component, 'indirectExposurePaths') == '/Org/repoA/src;/Org/repoA/src'
+
+
+def test_unmerged_rows_are_byte_identical_after_the_render_moves():
+    """The whole risk of moving the render: a row nothing merged must not shift by one byte.
+
+    Every property, in order, with its exact value — not a subset check, because the failure this
+    guards against is a re-render that reorders or reformats rather than one that drops a field.
+    """
+    model = model_with_indirect_exposure()
+
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    lodash = [c for c in components if c['name'] == 'lodash'][0]
+
+    assert lodash['properties'] == [
+        {
+            'name': 'sourceCodeReferences',
+            'value': '/Org/repoA/src/app.js'
+        },
+        {
+            'name': 'indirectExposureCount',
+            'value': '1'
+        },
+        {
+            'name': 'indirectExposurePaths',
+            'value': '/Org/repoA/src'
+        },
+    ]
+
+
+@pytest.mark.parametrize('generate', [
+    lambda model: [sbom_cyclonedx_generator.generate_from_sgraph(model)],
+    lambda model: generate_multi_from_sgraph(model, level=2),
+    lambda model: [generate_for_element_from_sgraph(model, '/Org/repoA')],
+])
+def test_no_emitted_component_carries_an_internal_key(generate):
+    """_evidence is collection-time scaffolding and must never reach a document.
+
+    Parametrised over every public generator, which under one-site placement is the executable
+    form of the completeness argument: finalize sits at the render boundary, so a document that
+    escaped it would have to escape rendering itself. The existing whole-document invariant walks
+    properties only and cannot see a stray top-level key.
+    """
+    for document in generate(folding_pair_model(indirect_for_install_path=True)):
+        for component in document['components']:
+            internal = [key for key in component if key.startswith('_')]
+            assert internal == [], (component.get('purl'), internal)
+
+
+def test_a_merge_records_the_identifiers_it_superseded():
+    """A consumer holding the folded-away identifier needs the map to the surviving one."""
+    component = only_component(nuget_case_fold_model())
+
+    assert component['purl'] == 'pkg:nuget/NLog@5.0.0'
+    assert find_property(component, 'supersededIdentifiers') == 'pkg:nuget/nlog@5.0.0'
+
+
+def test_a_merge_of_identical_refs_records_no_supersession():
+    """Anti-vacuity: a repaired install path merges into the SAME identifier, superseding nothing.
+
+    Without this the property could be emitted on every merge and still pass the test above, which
+    would publish a migration map naming the identifier it maps to.
+    """
+    component = only_component(folding_pair_model())
+
+    assert component['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+    assert find_property(component, 'supersededIdentifiers') is None
+
+
+def test_repair_provenance_survives_only_when_every_merged_element_was_repaired():
+    """packageNameResolution asserts how THIS row's identity was derived, so a merge can retract it.
+
+    Kept only when every merged element was repaired; otherwise the row would claim its identity
+    came from a repair while another element published the same identity outright.
+    """
+    mixed = only_component(folding_pair_model())
+    assert find_property(mixed, 'packageNameResolution') is None
+
+    model = SGraph(SElement(None, ''))
+    npm = model.createOrGetElementFromPath('/Org/External/NPM')
+    for requirer in ('wrap-ansi-cjs', 'string-width-cjs'):
+        internal = model.createOrGetElementFromPath(f'/Org/repoA/src/{requirer}.js')
+        element = SElement(npm, f'{requirer}/strip-ansi')
+        element.attrs['version'] = '6.0.1'
+        SElementAssociation(internal, element, 'packagejson').initElems()
+
+    both_repaired = only_component(model)
+    assert both_repaired['purl'] == 'pkg:npm/strip-ansi@6.0.1'
+    assert find_property(both_repaired, 'packageNameResolution') is not None
+
+
+@pytest.mark.parametrize('label,build,generate', [
+    ('legacy', folding_pair_model,
+     lambda model: [sbom_cyclonedx_generator.generate_from_sgraph(model)]),
+    ('level', folding_pair_model, lambda model: generate_multi_from_sgraph(model, level=2)),
+    ('transitive', nuget_case_fold_model,
+     lambda model: generate_multi_from_sgraph(model, level=2, transitive=True)),
+])
+def test_every_fold_site_merges(label, build, generate):
+    """All three fold sites, because a fix at one leaves the other two losing data silently.
+
+    Three independent implementations of "drop the duplicate" grew separately and only one ever
+    noticed it was discarding information. The transitive case uses the two-repository model
+    because that site folds ACROSS subtrees — within one subtree the earlier site has already
+    folded, and the parametrisation would test the same code path three times.
+    """
+    merged = [
+        component for document in generate(build()) for component in document['components']
+        if component.get('purl') in ('pkg:npm/strip-ansi@6.0.1', 'pkg:nuget/NLog@5.0.0')
+    ]
+
+    assert merged, label
+    for component in merged:
+        references = find_property(component, 'sourceCodeReferences') or ''
+        assert len(references.split(';')) == 2, (label, references)
+
+
+def test_a_nuget_case_fold_keeps_both_elements_evidence():
+    """The instance of this defect that was already shipping before P2 made it common.
+
+    P2 did not introduce evidence loss; it made it measurable. This fold has been discarding one
+    spelling's references for as long as the case fold has existed, and it is the reason the fix
+    is a general primitive rather than a repair-specific patch.
+    """
+    component = only_component(nuget_case_fold_model())
+
+    assert find_property(component,
+                         'sourceCodeReferences') == '/Org/repoA/src/a.cs;/Org/repoB/src/b.cs'
+
+
+def test_a_duplicate_carries_a_depth_to_compare_at_every_fold_site():
+    """The component is complete before the fold decides, so the primitive always has both sides.
+
+    Previously the duplicate was discarded BEFORE dependencyDepth was attached, so a depth merge
+    received nothing to compare and silently did nothing. Legacy mode is absent from this test on
+    purpose: it publishes no depth at all, which
+    test_dependency_depth_is_absent_from_a_default_mode_bom pins.
+    """
+    documents = generate_multi_from_sgraph(nuget_case_fold_model(), level=2, transitive=True,
+                                           transitive_externals=True)
+    for document in documents:
+        for component in document['components']:
+            if component.get('purl') == 'pkg:nuget/NLog@5.0.0':
+                assert find_property(component, 'dependencyDepth') is not None
+
+
+def test_two_elements_folding_to_one_key_report_the_shorter_depth_within_one_subtree():
+    """Two readings of emit() disagreed on whether it shares the cross-subtree depth defect.
+
+    Written to fail if the per-subtree walk can record the longer route: NLog is reached directly
+    by a.cs at depth 1 and nlog through a package chain at depth 3, both inside ONE subtree. If
+    this passes unchanged then breadth-first ordering guarantees the shorter route arrives first
+    and the exposure never existed at this site; if it fails, the site needed the same primitive
+    the cross-subtree merge needed.
+    """
+    model = SGraph(SElement(None, ''))
+    a_file = model.createOrGetElementFromPath('/Org/repoA/src/a.cs')
+    assemblies = model.createOrGetElementFromPath('/Org/External/Assemblies')
+    lower = SElement(assemblies, 'nlog')
+    lower.attrs['version'] = '5.0.0'
+    upper = SElement(assemblies, 'NLog')
+    upper.attrs['version'] = '5.0.0'
+    hop_one = SElement(assemblies, 'first-hop')
+    hop_one.attrs['version'] = '1.0.0'
+    hop_two = SElement(assemblies, 'second-hop')
+    hop_two.attrs['version'] = '1.0.0'
+    # depth 3 route recorded first, then the direct one
+    SElementAssociation(a_file, hop_one, 'assembly_ref').initElems()
+    SElementAssociation(hop_one, hop_two, 'assembly_ref').initElems()
+    SElementAssociation(hop_two, lower, 'assembly_ref').initElems()
+    SElementAssociation(a_file, upper, 'assembly_ref').initElems()
+
+    documents = generate_multi_from_sgraph(model, level=2, transitive_externals=True)
+    nlog = [
+        component for document in documents for component in document['components']
+        if component['name'].lower() == 'nlog'
+    ]
+
+    assert nlog, [c['purl'] for d in documents for c in d['components']]
+    assert find_property(nlog[0], 'dependencyDepth') == '1'
+
+
+def test_finalize_is_idempotent_and_leaves_internal_components_alone():
+    """Called twice it changes nothing, and a component it does not own it does not touch.
+
+    Idempotence matters because the render boundary is reachable more than once for one SBOM
+    object, and an internal component carries no evidence at all — it must emerge byte-identical
+    rather than gaining an empty rendering of properties it never had.
+    """
+    third_party = {
+        'name': 'strip-ansi',
+        'purl': 'pkg:npm/strip-ansi@6.0.1',
+        'properties': [{
+            'name': 'sourceCodeReferences',
+            'value': '/Org/repoA/src/a.js'
+        }],
+        '_evidence': {
+            'direct': ['/Org/repoA/src/a.js'],
+            'indirect': [],
+            'superseded': []
+        },
+    }
+    internal = {
+        'name': 'repoB',
+        'bom-ref': 'repoB',
+        'properties': [{
+            'name': 'softagram:internal',
+            'value': 'true'
+        }]
+    }
+    components = [third_party, internal]
+    internal_before = copy.deepcopy(internal)
+
+    sbom_cyclonedx_generator.finalize_components(components)
+    once = copy.deepcopy(components)
+    sbom_cyclonedx_generator.finalize_components(components)
+
+    assert components == once
+    assert internal == internal_before
+    assert '_evidence' not in third_party
+
+
+# --- reporting channel tests (P3) ---
+#
+# The generator's only reporting channel is stderr, and one loop writes on it unconditionally.
+# A2 takes ownership of reporting, so the guard is fixed here rather than left for whoever next
+# notices their sweep output streaming element paths.
+
+
+def test_the_generator_is_silent_without_the_noisy_flag(capsys):
+    """Default output belongs to the caller, and today one loop writes to stderr on every run.
+
+    The `for e in other_excluding_parent` loop in elem_as_bom_data sits OUTSIDE the `noisy` guard
+    that its own header line respects, so any model carrying three externals of one name prints
+    paths during a perfectly ordinary export. Reproduced here with exactly that shape.
+    """
+    model = SGraph(SElement(None, ''))
+    referrer = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    for root in ('NPM', 'PIP', 'APT'):
+        parent = model.createOrGetElementFromPath(f'/Org/External/{root}')
+        elem = SElement(parent, 'lodash')
+        SElementAssociation(referrer, elem, 'use').initElems()
+
+    sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    assert capsys.readouterr().err == ''
+
+
+def test_source_code_references_contain_no_duplicate_paths():
+    """The premise two renderers depend on, asserted where it is ESTABLISHED.
+
+    produce_source_code_references deduplicates direct references by element and builds indirect
+    exposure as a set of elements, so its lists carry no repeats. The single-element renderer
+    counts the raw list while the merge counts the cardinality of a set: they agree only because
+    of that. If this function ever returned duplicates, unmerged rows would report a sum and
+    merged rows a cardinality — the divergence the merge rules explicitly forbid — silently.
+
+    Asserted here rather than commented at either renderer, because a guard at the consumer sits
+    where the breakage would not originate and a comment cannot fail.
+    """
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.js')
+    npm = model.createOrGetElementFromPath('/Org/External/NPM')
+    lodash = SElement(npm, 'lodash')
+    lodash.attrs['version'] = '4.17.21'
+    express = SElement(npm, 'express')
+    express.attrs['version'] = '4.18.2'
+    # two routes from one file to one package, direct and through express
+    SElementAssociation(app, lodash, 'use').initElems()
+    SElementAssociation(app, express, 'use').initElems()
+    SElementAssociation(express, lodash, 'packagejson').initElems()
+
+    direct, indirect = sbom_cyclonedx_generator.produce_source_code_references(
+        lodash, model.findElementFromPath('/Org/External'))
+
+    assert len(direct) == len(set(direct))
+    assert len(indirect) == len(set(indirect))
+
+
+# --- purl canonicalization tests (A4) ---
+#
+# Narrowed against the primary source, types/*-definition.json, rather than against PURL-TYPES.rst
+# which it supersedes. npm says case_sensitive true and "the npm scope @ sign prefix is always
+# percent encoded"; pypi says case_sensitive false with underscore-to-dash, and scopes its dot rule
+# to distribution FILE names rather than to the name component; nuget says case_sensitive true, so
+# its 300 uppercase ids are spec-conforming and are left alone.
+#
+# A4 canonicalises the PURL only. The disclosed name keeps whatever the model said — the opposite
+# of A1, which rewrites the name because the name denoted nothing.
+
+
+def canonical_component(root, raw_name, version, attrs=None):
+    """Emit one external under a root and return the single component describing it."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.txt')
+    parent = model.createOrGetElementFromPath(f'/Org/External/{root}')
+    elem = SElement(parent, raw_name)
+    elem.attrs['version'] = version
+    for key, value in (attrs or {}).items():
+        elem.attrs[key] = value
+    SElementAssociation(app, elem, 'use').initElems()
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    assert len(components) == 1, components
+    return components[0]
+
+
+def test_the_canonicalization_is_a_recorded_migration():
+    """Records two published identifiers that CHANGE, in one place a reviewer can find.
+
+    1 224 refs move: 1 053 npm scopes gaining %40 and 171 pypi names folded. Written asserting the
+    values shipping today and updated in the commit that lands the change, so a consumer-visible
+    migration appears in the diff of a test rather than only in a release note.
+    """
+    assert canonical_component('NPM', '@angular/animation',
+                               '12.3.1')['purl'] == 'pkg:npm/%40angular/animation@12.3.1'
+    assert canonical_component('PIP', 'zope_interface',
+                               '5.4.0')['purl'] == 'pkg:pypi/zope-interface@5.4.0'
+
+
+def test_an_npm_scope_is_percent_encoded():
+    """The npm definition states the scope's @ prefix is always percent encoded."""
+    component = canonical_component('NPM', '@angular/animation', '12.3.1')
+
+    assert component['purl'] == 'pkg:npm/%40angular/animation@12.3.1'
+
+
+def test_only_a_leading_at_is_encoded():
+    """A yarn protocol alias puts an @ inside the VERSION, and encoding there would corrupt it.
+
+    'string-width-cjs': 'npm:string-width@^4.2.0' produces a version carrying both @ and a colon.
+    Nine components in the stored models look like this. The name is what A4 canonicalises, so the
+    rule is anchored to the name's leading character rather than to any @ in the string.
+    """
+    component = canonical_component('NPM', 'string-width-cjs', 'npm:string-width@^4.2.0')
+
+    assert component['purl'] == 'pkg:npm/string-width-cjs@npm:string-width@^4.2.0'
+
+
+def test_the_version_separator_is_never_encoded():
+    """The @ that separates a version is punctuation, not part of any name."""
+    component = canonical_component('NPM', '@babel/core', '7.24.0')
+
+    assert component['purl'].endswith('@7.24.0')
+    assert component['purl'].count('%40') == 1
+
+
+def test_a_pypi_name_is_lowercased_and_underscores_become_dashes():
+    """pypi is case_sensitive false and replaces underscore with dash."""
+    component = canonical_component('PIP', 'Zope_Interface', '5.4.0')
+
+    assert component['purl'] == 'pkg:pypi/zope-interface@5.4.0'
+
+
+def test_a_pypi_name_keeps_its_dots():
+    """The control on the ruling: purl scopes its dot rule to distribution FILE names.
+
+    PEP 503 collapses dots for internal matching and match_key applies that, so zope.interface
+    still matches zope-interface where matching is what is wanted. Publishing is the other
+    operation, and it keeps the dots.
+    """
+    component = canonical_component('PIP', 'zope.interface', '5.4.0')
+
+    assert component['purl'] == 'pkg:pypi/zope.interface@5.4.0'
+
+
+def test_an_npm_name_keeps_its_case():
+    """npm is case_sensitive true: old mixed-case packages were grandfathered in."""
+    component = canonical_component('NPM', 'JSONStream', '1.3.5')
+
+    assert component['purl'] == 'pkg:npm/JSONStream@1.3.5'
+
+
+def test_a_nuget_name_keeps_its_case():
+    """nuget is case_sensitive true, so the 300 uppercase ids in the corpus are conforming."""
+    component = canonical_component('Assemblies', 'Newtonsoft.Json', '13.0.3')
+
+    assert component['purl'] == 'pkg:nuget/Newtonsoft.Json@13.0.3'
+
+
+def test_the_disclosed_name_stays_raw_and_carries_no_provenance():
+    """A4 canonicalises the purl only, and the raw spelling is already disclosed in name.
+
+    The opposite of A1, which rewrites the name because the name denoted nothing and therefore
+    owes a provenance property. Here the model's spelling is still true, so a property on 1 224
+    rows would duplicate the name field for zero information.
+    """
+    component = canonical_component('PIP', 'Zope_Interface', '5.4.0')
+
+    assert component['name'] == 'Zope_Interface'
+    assert find_property(component, 'packageNameResolution') is None
+
+
+def test_two_pypi_spellings_become_one_component():
+    """Folding the published name makes two spellings of one package one row."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.py')
+    parent = model.createOrGetElementFromPath('/Org/External/PIP')
+    for spelling in ('zope_interface', 'Zope_Interface'):
+        elem = SElement(parent, spelling)
+        elem.attrs['version'] = '5.4.0'
+        SElementAssociation(app, elem, 'use').initElems()
+
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+
+    assert [component['purl'] for component in components] == ['pkg:pypi/zope-interface@5.4.0']
+
+
+def test_a_golang_purl_is_untouched():
+    """golang ids contain separators and case that the definition does not license changing."""
+    component = canonical_component('Go', 'github.com/0xAX/notificator', '1.0.0')
+
+    assert component['purl'] == 'pkg:golang/github.com/0xAX/notificator@1.0.0'
+
+
+# --- purl key omission tests (A6) ---
+#
+# CycloneDX types 'purl' as a string with format 'iri-reference'. The empty string is not one, so
+# a strict validator may reject a document that carries it — the field said nothing, in a way that
+# was not legal. Omitting the key says the same nothing legally.
+#
+# Scoped to purl alone: 'version' has no format constraint, so an empty version is valid and stays
+# exactly as it is. Emptiness is not the defect; emptiness in a FORMATTED field is.
+
+
+def test_an_internal_component_with_an_identity_still_publishes_its_purl():
+    """The guard on over-deletion: omission is for rows with nothing to say, not for every row.
+
+    Removing an empty field and removing the field are one edit away from each other, and the
+    inlined-internal path is the one place that computes a purl conditionally — it starts from
+    the no-identity default and overwrites it when the subtree names a package. An edit that
+    dropped the key instead of the empty value would silently unpublish every identity this
+    sprint added.
+    """
+    component = the_internal_component(published_package_model())
+
+    assert component['purl'] == 'pkg:generic/ui-lib@2.1.0'
+
+
+def test_the_single_document_metadata_component_omits_its_purl():
+    """The third emission site, which no other test reaches.
+
+    generate_from_sgraph builds its metadata component in analyze_component_section rather than
+    in the multi-document path, so the two named metadata tests do not cover it and it kept its
+    empty purl through every earlier phase.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    assert 'purl' not in sbom['metadata']['component']
+    assert sbom['metadata']['component']['version'] == ''
+
+
+def test_no_purl_key_anywhere_in_any_fixture_is_empty():
+    """Estate invariant over every fixture and every mode, metadata components included.
+
+    The narrower invariant above reads one model's components in three modes. This one reads
+    every stored fixture in every generation mode and both positions a purl can occupy, because
+    the defect was three separate literals in three functions and a check that visited only one
+    of them is what let the other two survive this long.
+    """
+    fixtures = ('converters/modelfile_for_sbom_tests.xml', MULTI_MODEL, MIRRORED_MODEL,
+                BINARY_REFS_MODEL, MAVEN_COORDINATES_MODEL, EMISSION_MODEL)
+    modes = (dict(), dict(transitive=True), dict(transitive=True, transitive_externals=True))
+
+    checked = 0
+    for model_file in fixtures:
+        model, _ = get_model_and_model_api(model_file)
+        documents = [sbom_cyclonedx_generator.generate_from_sgraph(model)]
+        for kwargs in modes:
+            documents.extend(generate_multi_from_sgraph(model, level=2, **kwargs))
+        for document in documents:
+            for component in document['components'] + [document['metadata']['component']]:
+                assert component.get('purl', 'nonempty') != '', (model_file, component['name'])
+                checked += 1
+
+    assert checked > 0

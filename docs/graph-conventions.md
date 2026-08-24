@@ -64,6 +64,32 @@ External elements may carry a `repotype` attribute indicating the package manage
 
 An element can be tested for externality by checking whether any of its ancestors is named `External`. The library provides `isExternalElement()` for this purpose.
 
+#### Root semantics: registries, import graphs and stdlib namespaces
+
+The children of `External` are **not** interchangeable. Three distinct kinds share the level, and confusing them is the single largest source of misidentification:
+
+| Root | purl type | Kind | Depth semantics | Written by |
+|---|---|---|---|---|
+| `PIP` | `pypi` | registry | depth 1 = package, depth 2 = versioned instance | pip / requirements analyzer |
+| `Python` | `pypi` | **import graph** | depth 1 = imported module, deeper = subpath or code symbol | Python import analyzer |
+| `PythonLibs` | — | **stdlib namespace** | the standard library, never a dependency | structure analytics |
+| `NPM` | `npm` | registry **and** import graph | depth 1 = package; deeper = import subpath. A name may itself contain `/` (encoded `__slash__`) when it came from an install path | npm audit / lockfile / JS import analyzers |
+| `Go` | `golang` | import graph; `Go/Standard_Go` is stdlib | module paths contain `/` legitimately | Go analyzer |
+| `Maven` | `maven` | registry | identity is the `groupId`+`artifactId` attributes, not the name | Maven analyzer |
+| `Assemblies` | `nuget` | registry | depth 1 = assembly | .NET analyzer |
+| `APT` | `deb` | registry | depth 1 = package | Dockerfile analyzer |
+| `Docker/Image` | `docker` | image identity | name carries ` of tag <tag>` | Dockerfile analyzer |
+| `Docker/FilesysReference` | — | **filesystem paths** | `COPY` sources; not packages at all | Dockerfile analyzer |
+| `Java` | — | unclassified | — | — |
+
+An element under an import-graph root carrying **no version** is normally a module reference, not a missing dependency: the same package usually appears under the corresponding registry root with its version. An element whose incoming associations are all of deptype `ref` is an unresolved code symbol, not a package.
+
+`PythonLibs` and `Go/Standard_Go` deliberately assert **no** purl type. The standard library is not a dependency, and giving it an ecosystem would make a stdlib module name match a real published package — `dataclasses` is both a Python 3.7+ stdlib module and a real PyPI backport package.
+
+**The two npm shapes, which look alike and mean opposite things.** A slash in a *single element's name* (stored `__slash__`) is an **install path** written by the lockfile or audit analyzer: `wrap-ansi-cjs/strip-ansi` is `strip-ansi` as installed underneath `wrap-ansi-cjs`. Nested parent/child elements are an **import subpath** written by the JS import analyzer: `NPM/react-dom` with a child `server` is `react-dom/server`. In an install-path name the leading segments are the packages that **required** the package — they are requirers, not containers — and the final segment, or the final two when the package is scoped, is the installed package itself. The version on such an element belongs to that leaf, not to any prefix: a nested install exists precisely because the required version differs from the one hoisted to the top level, so the leaf at that exact version often appears nowhere else in the model.
+
+This documents the *convention*. sgraph itself remains convention-agnostic; the registry encoding this table lives in `sgraph/converters/external_root_semantics.py`.
+
 ### Element Types
 
 Element types are stored in the `type` attribute (`attrs['type']`). Types are free-form strings — the library does not enforce an enum. The following types are conventional:
