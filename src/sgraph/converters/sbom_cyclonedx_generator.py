@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 
 from sgraph import SGraph, SElement
 from sgraph.converters.external_root_semantics import (canonical_purl_name,
+                                                       is_advisory_materialised,
                                                        repair_npm_package_name)
 
 # Fixed namespace for deterministic UUID v5 generation of SBOM serial numbers.
@@ -55,6 +56,13 @@ def valid_for_bom(elem):
     # cost zero rows when it was removed (External elements carrying 'license': 0 across the 16
     # stored models, 0 across three produced by the current analyzer set), so nothing relied on
     # it; what it did carry was a silent emission for the first producer to stamp the attribute.
+    #
+    # An advisory-materialised element is refused before anything else is considered. Its name
+    # carries an affected RANGE where a version belongs, so every admission clause below would
+    # say yes to it, and the component it produced asserted an install that never happened. This
+    # is the one exclusion the producer states outright rather than the document inferring it.
+    if is_advisory_materialised(elem):
+        return False
     return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name \
            or (is_maven_coordinate(elem.attrs.get('groupId', ''))
                and is_maven_coordinate(elem.attrs.get('artifactId', ''))

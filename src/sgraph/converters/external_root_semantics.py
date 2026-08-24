@@ -37,6 +37,33 @@ ROLE_IMAGE = 'image'
 ROLE_FINDING = 'finding'
 ROLE_UNKNOWN = 'unknown'
 
+# What the producer says the version segment of an element name MEANS. The model has long used a
+# single node shape -- `package of version X` -- for an installed release, for an advisory's
+# affected range, and for a constraint declared in a manifest, with nothing distinguishing them.
+# Only the first is inventory, and every consumer that had to infer which was which inferred
+# differently.
+VERSION_KIND_ATTRIBUTE = 'version_kind'
+
+# A version element the producer invented so a finding would have a parent, named after the
+# advisory's affected range. Nothing is installed at it.
+VERSION_KIND_ADVISORY_RANGE = 'advisory_range'
+
+
+def is_advisory_materialised(elem):
+    """Whether the producer marked this element as an advisory's range rather than an install.
+
+    Reads the attribute and NOTHING else. Absence means installed, which is what keeps every model
+    analysed before the producer stamped it readable and byte-identical -- a structural fallback
+    guessing from tree shape would change what those models emit, and the whole point of the
+    attribute is to stop consumers guessing.
+
+    Only the one value suppresses. 'declared_range' is the intended sibling and names a different
+    population -- one element per declaring dependent, each with real incoming edges -- so keying
+    on the mere presence of the attribute would silently drop those the day they are stamped.
+    """
+    return elem.attrs.get(VERSION_KIND_ATTRIBUTE) == VERSION_KIND_ADVISORY_RANGE
+
+
 # Layer 1: root -> ecosystem, a TOTAL function whose unknown answer is None.
 #
 # Keyed by PATH FRAGMENT rather than by root name, because two roots one level below `Docker` mean
