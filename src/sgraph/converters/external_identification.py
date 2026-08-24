@@ -512,6 +512,22 @@ def coverage_compositions(report, subject_ref=None):
     return [composition]
 
 
+def attach_coverage_compositions(document, report):
+    """Attach the completeness claim to a document, naming that document's own subject.
+
+    Opt-in by being called, like attach_coverage_summary and for the same reason: default-off
+    lives in the call graph, where a test over every public entry point can check it, rather than
+    in a parameter default, where it would be invisible.
+
+    The subject is the metadata component, because the claim is about the assembly of THIS
+    document rather than of the model. A document whose metadata component carries no bom-ref
+    names no subject, and the composition is then emitted with no assemblies at all.
+    """
+    subject_ref = document.get('metadata', {}).get('component', {}).get('bom-ref')
+    document.setdefault('compositions', []).extend(coverage_compositions(report, subject_ref))
+    return document
+
+
 def attach_coverage_summary(document, report):
     """Attach four fixed-cardinality counts to a document's metadata.
 

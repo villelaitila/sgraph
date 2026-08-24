@@ -584,6 +584,54 @@ def test_a_composition_with_no_subject_omits_assemblies():
     assert 'assemblies' not in compositions[0]
 
 
+def test_attaching_compositions_names_the_documents_own_subject():
+    """The claim is about THIS document's assembly, so it must name this document's subject.
+
+    The expected ref is pinned rather than only compared against the document, because reading
+    the subject out of the same document it is asserted against cannot fail.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/left-pad', referenced_by='a.js')
+    document = sbom_cyclonedx_generator.generate_from_sgraph(model)
+    report = identification().external_coverage_report(model)
+
+    subject = document['metadata']['component']['bom-ref']
+    identification().attach_coverage_compositions(document, report)
+
+    assert subject == '/Org'
+    assert document['compositions'] == [{'aggregate': 'incomplete', 'assemblies': [subject]}]
+
+
+def test_attaching_compositions_to_a_subjectless_document_omits_assemblies():
+    """A document whose metadata component carries no bom-ref names no subject to reference."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/left-pad', referenced_by='a.js')
+    report = identification().external_coverage_report(model)
+    document = {'metadata': {'component': {}}}
+
+    identification().attach_coverage_compositions(document, report)
+
+    assert document['compositions'] == [{'aggregate': 'incomplete'}]
+
+
+@pytest.mark.parametrize('generate', [
+    lambda model: [sbom_cyclonedx_generator.generate_from_sgraph(model)],
+    lambda model: sbom_cyclonedx_generator.generate_multi_from_sgraph(model, level=2),
+    lambda model: [sbom_cyclonedx_generator.generate_for_element_from_sgraph(model, '/Org/repoA')],
+])
+def test_no_generator_path_attaches_compositions(generate):
+    """Default-off lives in the call graph for compositions too, for the same reason.
+
+    A completeness claim nobody asked for is still a claim, and it would appear in every document
+    the moment a call site was added by reflex. Asserted over every public entry point.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/lodash', version='4.17.21', referenced_by='a.js')
+
+    for document in generate(model):
+        assert 'compositions' not in document
+
+
 def test_a_registry_root_never_produces_a_subpath():
     """Subpaths are an IMPORT_GRAPH concept and do not exist under a pure registry root.
 
