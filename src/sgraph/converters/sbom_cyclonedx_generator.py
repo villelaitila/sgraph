@@ -1002,12 +1002,16 @@ def analyze_component_section(elem, sbom):
     :param sbom:
     :return:
     """
+    # No 'purl' key: CycloneDX types it as an iri-reference and the empty string is not one, so
+    # a strict validator may reject the whole document over a field that was saying nothing. An
+    # element describing the analyzed subject publishes no package, and omitting the key is how
+    # that is said legally. 'version' is left empty deliberately — it carries no format
+    # constraint, so an empty version is valid and removing it would change output for no reason.
     c = {
         'bom-ref': elem.getPath(),
         'type': 'application',
         'name': elem.name,
         'version': '',
-        'purl': '',
         'externalReferences': []
     }
     for repo in elem.children:
@@ -1459,12 +1463,15 @@ def _internal_element_component(bom_ref, elem, serial):
 
     :param serial: the 'urn:uuid:...' serial of the element's own standalone SBOM
     """
+    # No 'purl' key here rather than an empty one, for the reason given in
+    # analyze_component_section. This is the one site where the field is CONDITIONAL: the identity
+    # branch below adds it when the subtree names a package unambiguously, so absence means the
+    # element publishes nothing identifiable, not that identity was dropped.
     component = {
         'bom-ref': bom_ref,
         'type': 'library',
         'name': elem.name,
         'version': '',
-        'purl': '',
         'properties': [{'name': 'softagram:internal', 'value': 'true'}],
         'externalReferences': [{
             'url': f"urn:cdx:{serial.replace('urn:uuid:', '')}/1",
@@ -1711,12 +1718,14 @@ def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=F
     ref = ctx['elem_bom_refs'][path]
 
     # Metadata component
+    # No 'purl' key, for the reason given in analyze_component_section: this component describes
+    # the document's own subject, which is an element rather than a package, and an empty
+    # iri-reference is invalid where an absent one is fine.
     sbom.metadata_component = {
         'bom-ref': ref,
         'type': 'application',
         'name': orig_elem.name,
         'version': '',
-        'purl': '',
         'externalReferences': []
     }
     _add_element_location(sbom.metadata_component, orig_elem)

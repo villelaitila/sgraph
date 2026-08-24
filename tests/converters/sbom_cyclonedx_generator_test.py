@@ -288,7 +288,7 @@ def test_the_transitive_view_still_inlines_an_internal_element_without_identity(
 
     inlined = internal_components(sbom_of(result, 'repoA'))
     assert [c['name'] for c in inlined] == ['repoB']
-    assert inlined[0]['purl'] == ''
+    assert 'purl' not in inlined[0]
 
 
 def test_the_third_party_components_are_untouched_by_internal_inlining():
@@ -1318,7 +1318,7 @@ def test_an_element_that_publishes_no_package_keeps_the_element_name():
 
     assert component['name'] == 'repoB'
     assert component['version'] == ''
-    assert component['purl'] == ''
+    assert 'purl' not in component
     assert find_property(component, 'softagram:packageEcosystem') is None
 
 
@@ -1341,7 +1341,7 @@ def test_a_model_predating_the_identity_triple_is_untouched():
 
     assert component['name'] == 'repoB'
     assert component['version'] == ''
-    assert component['purl'] == ''
+    assert 'purl' not in component
 
 
 def test_an_ambiguous_multi_package_repository_falls_back_to_the_element_name():
@@ -1362,7 +1362,7 @@ def test_an_ambiguous_multi_package_repository_falls_back_to_the_element_name():
     component = the_internal_component(model)
 
     assert component['name'] == 'repoB'
-    assert component['purl'] == ''
+    assert 'purl' not in component
 
 
 def test_the_package_actually_depended_upon_resolves_the_ambiguity():
@@ -1394,7 +1394,12 @@ def test_no_component_of_any_document_has_an_empty_purl():
     An empty purl is not a harmless blank — it is a row a consumer cannot match against anything,
     which is what an internal dependency looked like before it had an identity. The metadata
     component is excluded on purpose: it describes the document's own subject rather than a
-    dependency of it, and it stays empty by its own separate rule.
+    dependency of it, and it carries no purl at all by its own separate rule.
+
+    Absence and emptiness are different answers and only one of them is legal: CycloneDX types
+    purl as an iri-reference, which the empty string is not, so a row with nothing to say omits
+    the key. The disjunction is what makes this an invariant about EMPTINESS rather than about
+    presence — a component may say nothing, but it may not say nothing badly.
     """
     model = published_package_model()
     third_party = model.createOrGetElementFromPath(
@@ -1407,7 +1412,8 @@ def test_no_component_of_any_document_has_an_empty_purl():
                                                        transitive_externals=True)):
         for sbom in generate_multi_from_sgraph(model, level=2, **kwargs):
             for component in sbom['components']:
-                assert component['purl'], (kwargs, component['name'])
+                assert 'purl' not in component or component['purl'], (kwargs,
+                                                                      component['name'])
 
 
 # --- Selected-element SBOM tests ---
@@ -1585,14 +1591,20 @@ def test_purl_and_version_stay_empty_on_the_metadata_component():
     """Characterization: the metadata component has no package identity, and must not gain one.
 
     Guards against a later 'fill the empty field' edit putting the element path into purl, where
-    it would violate the purl grammar and be rejected by a purl-parsing consumer.
+    it would violate the purl grammar and be rejected by a purl-parsing consumer. The field is
+    now omitted rather than emitted empty, so that edit has no empty field to find — but the
+    guard still holds, because omission is not an invitation to populate it either.
+
+    version stays empty and is deliberately NOT given the same treatment: CycloneDX constrains
+    purl to an iri-reference and constrains version not at all, so the empty string is legal
+    there and removing it would change output for no stated reason.
     """
     model, _ = get_model_and_model_api(MULTI_MODEL)
     result = generate_multi_from_sgraph(model, level=3)
 
     assert len(result) == 2
     for sbom in result:
-        assert sbom['metadata']['component']['purl'] == ''
+        assert 'purl' not in sbom['metadata']['component']
         assert sbom['metadata']['component']['version'] == ''
 
 
@@ -3346,7 +3358,7 @@ def test_every_fold_site_merges(label, build, generate):
     """
     merged = [
         component for document in generate(build()) for component in document['components']
-        if component['purl'] in ('pkg:npm/strip-ansi@6.0.1', 'pkg:nuget/NLog@5.0.0')
+        if component.get('purl') in ('pkg:npm/strip-ansi@6.0.1', 'pkg:nuget/NLog@5.0.0')
     ]
 
     assert merged, label
@@ -3380,7 +3392,7 @@ def test_a_duplicate_carries_a_depth_to_compare_at_every_fold_site():
                                            transitive_externals=True)
     for document in documents:
         for component in document['components']:
-            if component['purl'] == 'pkg:nuget/NLog@5.0.0':
+            if component.get('purl') == 'pkg:nuget/NLog@5.0.0':
                 assert find_property(component, 'dependencyDepth') is not None
 
 
@@ -3650,3 +3662,68 @@ def test_a_golang_purl_is_untouched():
     component = canonical_component('Go', 'github.com/0xAX/notificator', '1.0.0')
 
     assert component['purl'] == 'pkg:golang/github.com/0xAX/notificator@1.0.0'
+
+
+# --- purl key omission tests (A6) ---
+#
+# CycloneDX types 'purl' as a string with format 'iri-reference'. The empty string is not one, so
+# a strict validator may reject a document that carries it — the field said nothing, in a way that
+# was not legal. Omitting the key says the same nothing legally.
+#
+# Scoped to purl alone: 'version' has no format constraint, so an empty version is valid and stays
+# exactly as it is. Emptiness is not the defect; emptiness in a FORMATTED field is.
+
+
+def test_an_internal_component_with_an_identity_still_publishes_its_purl():
+    """The guard on over-deletion: omission is for rows with nothing to say, not for every row.
+
+    Removing an empty field and removing the field are one edit away from each other, and the
+    inlined-internal path is the one place that computes a purl conditionally — it starts from
+    the no-identity default and overwrites it when the subtree names a package. An edit that
+    dropped the key instead of the empty value would silently unpublish every identity this
+    sprint added.
+    """
+    component = the_internal_component(published_package_model())
+
+    assert component['purl'] == 'pkg:generic/ui-lib@2.1.0'
+
+
+def test_the_single_document_metadata_component_omits_its_purl():
+    """The third emission site, which no other test reaches.
+
+    generate_from_sgraph builds its metadata component in analyze_component_section rather than
+    in the multi-document path, so the two named metadata tests do not cover it and it kept its
+    empty purl through every earlier phase.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    sbom = sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    assert 'purl' not in sbom['metadata']['component']
+    assert sbom['metadata']['component']['version'] == ''
+
+
+def test_no_purl_key_anywhere_in_any_fixture_is_empty():
+    """Estate invariant over every fixture and every mode, metadata components included.
+
+    The narrower invariant above reads one model's components in three modes. This one reads
+    every stored fixture in every generation mode and both positions a purl can occupy, because
+    the defect was three separate literals in three functions and a check that visited only one
+    of them is what let the other two survive this long.
+    """
+    fixtures = ('converters/modelfile_for_sbom_tests.xml', MULTI_MODEL, MIRRORED_MODEL,
+                BINARY_REFS_MODEL, MAVEN_COORDINATES_MODEL, EMISSION_MODEL)
+    modes = (dict(), dict(transitive=True), dict(transitive=True, transitive_externals=True))
+
+    checked = 0
+    for model_file in fixtures:
+        model, _ = get_model_and_model_api(model_file)
+        documents = [sbom_cyclonedx_generator.generate_from_sgraph(model)]
+        for kwargs in modes:
+            documents.extend(generate_multi_from_sgraph(model, level=2, **kwargs))
+        for document in documents:
+            for component in document['components'] + [document['metadata']['component']]:
+                assert component.get('purl', 'nonempty') != '', (model_file, component['name'])
+                checked += 1
+
+    assert checked > 0
