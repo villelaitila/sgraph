@@ -7,6 +7,7 @@ import sys
 from collections import Counter, defaultdict
 
 from sgraph import SGraph, SElement
+from sgraph.converters.external_root_semantics import repair_npm_package_name
 
 # Fixed namespace for deterministic UUID v5 generation of SBOM serial numbers.
 SGRAPH_SBOM_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://softagram.com/sgraph/sbom")
@@ -42,8 +43,18 @@ def valid_for_bom(elem):
     # groupId resolved only in an external parent) build no maven purl, and versionless there
     # is nothing spec-clean left to emit — the fallback would splice the space-bearing element
     # name into a generic purl.
+    #
+    # A licence deliberately does NOT qualify, and neither does a hash: both are facts ABOUT a
+    # package, never evidence that the element carrying one IS a package. Admitting on a licence
+    # published an element the model never claimed was installed — including elements with no
+    # incoming reference at all, which then appeared as declared dependencies of an estate that
+    # never referenced them — and, on the import graph, an unresolved code symbol whose purl type
+    # falls back to 'generic': a licence on /External/Python/starlette/responses/Response emitted
+    # 'pkg:generic/Response', a generic-ecosystem package named after a Python class. The clause
+    # cost zero rows when it was removed (External elements carrying 'license': 0 across the 16
+    # stored models, 0 across three produced by the current analyzer set), so nothing relied on
+    # it; what it did carry was a silent emission for the first producer to stamp the attribute.
     return 'version' in elem.attrs or ' of version ' in elem.name or ' of tag ' in elem.name \
-           or 'license' in elem.attrs \
            or (is_maven_coordinate(elem.attrs.get('groupId', ''))
                and is_maven_coordinate(elem.attrs.get('artifactId', ''))
                and bool(elem.incoming))
@@ -360,15 +371,27 @@ def maven_purl(elem, version):
     return f'pkg:maven/{group_id}/{artifact_id}@{version}'
 
 
-def purl_for(elem, v):
-    """Build the purl of an element and report how its package type was resolved.
+NAME_RESOLUTION_PROPERTY = 'packageNameResolution'
+
+
+def resolved_purl(elem, v):
+    """Build the purl of an element, repairing an install-path identity, and report both.
 
     :param elem: the external element to describe
     :param v: the version string of that element
-    :return: (purl, properties) where properties is a list of CycloneDX property dicts. It is
-             non-empty only when the type was inferred or fell back; a type resolved from an
-             attribute naming an ecosystem, or from an ecosystem-named ancestor, is not a guess
-             and gets no property.
+    :return: (purl, repaired_name or None, properties). properties is non-empty only when the
+             type was inferred or fell back, or when the name was repaired; a type resolved from
+             an attribute naming an ecosystem, or from an ecosystem-named ancestor, is not a
+             guess and gets no property.
+
+    The repair is applied once, after the type is resolved and before the version splice. That
+    position is forced rather than chosen: the maven branch returns earlier and must not be
+    reached by it, the docker branch replaces pkgid with a path of its own, and FOUR returns
+    follow the splice point - a per-branch repair would apply to one of them and miss three.
+
+    The name leaves through the return value because the caller needs it too: the component's
+    'name' field is built from the element name a second time, outside this function, and a
+    repaired purl beside an unrepaired name would name a package the document does not identify.
     """
     properties: list[dict] = []
     pkgid = clean_name(elem.name)  # todo also use url like github.com/foo/reponame
@@ -386,7 +409,8 @@ def purl_for(elem, v):
     elif elem.parent.name == 'Maven':
         maven = maven_purl(elem, v.lstrip('^'))
         if maven is not None:
-            return maven, properties
+            # Returns before the repair seam: a maven id is not a path.
+            return maven, None, properties
         pkgtype = FALLBACK_PURL_TYPE
         properties.append({
             'name': PURL_TYPE_SOURCE_PROPERTY,
@@ -444,21 +468,62 @@ def purl_for(elem, v):
             properties.append({'name': PURL_TYPE_SOURCE_PROPERTY, 'value': 'ecosystem unresolved'})
 
     v = v.lstrip('^')
+    # The version gate is the only guard on the repair ITSELF, and valid_for_bom blocks two
+    # further routes to emission today — the parent_version-only route and the 'versions' plural
+    # route both compute a repair that then emits nothing. It reads the stripped parameter
+    # rather than the element: bom_ref is public and its caller may pass a version the element
+    # does not carry, and dedup_key keys on the resulting ref, so disagreeing about a version
+    # here would split one package's identity in two. Stripped, because '^' alone is non-empty
+    # before this line and empty after it.
+    #
+    # Ungated, the rule would rewrite 363 unversioned slash-bearing npm ids across the 16 stored
+    # models: 'wrap-ansi-cjs/strip-ansi' carrying no version is one of them, and the same id
+    # occurs versioned elsewhere. Two reasons the gate is explicit rather than left to the call
+    # path. The tail-is-the-package rule was established by matching each element's version
+    # against the leaf's and against the prefix's, so an unversioned element carries no evidence
+    # either way and a repair there asserts what cannot be falsified. And an unversioned element
+    # emits no component, so the repair could improve no purl — while an admission rule widened
+    # later would, ungated, start emitting versionless rows for packages named only by the chain
+    # that required them.
+    repaired_name = None
+    if pkgtype == 'npm' and v and '/' in pkgid:
+        repair = repair_npm_package_name(pkgid)
+        if repair is not None:
+            # The rule id is returned for the per-rule counters the coverage report will keep;
+            # the disclosed text is the same for both rules, because what a consumer needs is
+            # the id the model gave, not which branch matched it.
+            repaired_name = repair[0]
+            properties.append({
+                'name': NAME_RESOLUTION_PROPERTY,
+                'value': f'repaired from install path: {pkgid}'
+            })
+            pkgid = repaired_name
+
     # Both rules live here rather than in each branch above, so a purl type added later inherits
     # them. The maven branch returns before reaching this point and applies the unresolved rule
     # itself through the same predicate; a maven version is a POM <version> and never a URL.
     if is_unresolved_version(v):
-        return f'pkg:{pkgtype}/{pkgid}', properties
+        return f'pkg:{pkgtype}/{pkgid}', repaired_name, properties
     if URL_SHAPED_VERSION.match(v):
         # Disclosed rather than dropped: the raw value stays in the component's version field,
         # and this property records why the purl carries no version.
         properties.append({'name': VERSION_SOURCE_PROPERTY, 'value': v})
-        return f'pkg:{pkgtype}/{pkgid}', properties
+        return f'pkg:{pkgtype}/{pkgid}', repaired_name, properties
     # The versionless-inclusion rule made an empty version reachable here, not only in
     # maven_purl: charset-rejected coordinates drop a versionless element to this splice.
     if not v:
-        return f'pkg:{pkgtype}/{pkgid}', properties
-    return f'pkg:{pkgtype}/{pkgid}@{v}', properties
+        return f'pkg:{pkgtype}/{pkgid}', repaired_name, properties
+    return f'pkg:{pkgtype}/{pkgid}@{v}', repaired_name, properties
+
+
+def purl_for(elem, v):
+    """Build the purl of an element and report how its package type was resolved.
+
+    Backward-compatible 2-tuple wrapper around resolved_purl; do not remove. A caller that also
+    needs the repaired name calls resolved_purl directly.
+    """
+    purl, _repaired_name, properties = resolved_purl(elem, v)
+    return purl, properties
 
 
 def bom_ref(elem, v):
@@ -573,6 +638,95 @@ def produce_source_code_references(elem, external_root) -> tuple[list[str], list
     return direct_paths, indirect_dependencies
 
 
+EVIDENCE_KEY = '_evidence'
+SUPERSEDED_PROPERTY = 'supersededIdentifiers'
+
+
+def _property(component, name):
+    for prop in component.get('properties', []):
+        if prop['name'] == name:
+            return prop
+    return None
+
+
+def _set_property(component, name, value):
+    """Update a property in place, or append it when the component does not carry it yet.
+
+    In place, because the order properties were emitted in is part of the output: a merged row
+    that re-rendered by appending would reorder every row it touched.
+    """
+    existing = _property(component, name)
+    if existing is not None:
+        existing['value'] = value
+    else:
+        component.setdefault('properties', []).append({'name': name, 'value': value})
+
+
+def merge_component_evidence(surviving, duplicate):
+    """Fold a duplicate into the component that survives, as the UNION of what both elements know.
+
+    Which row survives is decided by document order, a traversal artefact, so first-wins is
+    correct only when the duplicate carries nothing the survivor lacks — a condition no fold site
+    ever checked. Measured before this existed: seven of sixteen affected rows lost evidence, two
+    of them keeping sourceCodeReferences as a name while its value was emptied.
+
+    The merge reproduces, for the union of the elements, exactly the deduplication the
+    single-element path applies: references are a set, the indirect count is the cardinality of
+    the union rather than a sum (the set is of elements, and the overlap is largest exactly when
+    a merge is most likely), and the abstracted paths are not re-deduplicated because the
+    single-element path does not re-deduplicate them either.
+    """
+    surviving_evidence = surviving.setdefault(EVIDENCE_KEY, {
+        'direct': [],
+        'indirect': [],
+        'superseded': []
+    })
+    empty = {'direct': [], 'indirect': [], 'superseded': []}
+    duplicate_evidence = duplicate.get(EVIDENCE_KEY, empty)
+    for field in ('direct', 'indirect', 'superseded'):
+        surviving_evidence[field] = sorted(
+            set(surviving_evidence[field]) | set(duplicate_evidence[field]))
+
+    duplicate_ref = duplicate.get('bom-ref')
+    if duplicate_ref and duplicate_ref != surviving.get('bom-ref'):
+        surviving_evidence['superseded'] = sorted(
+            set(surviving_evidence['superseded']) | {duplicate_ref})
+
+    _keep_the_shorter_depth(surviving, duplicate)
+
+    # A repair provenance describes how THIS row's identity was derived. If any merged element
+    # published the identity without being repaired, the row would be claiming a derivation that
+    # is not the only account of it, so the claim is retracted rather than qualified.
+    if _property(surviving, NAME_RESOLUTION_PROPERTY) is not None:
+        if _property(duplicate, NAME_RESOLUTION_PROPERTY) is None:
+            surviving['properties'] = [
+                prop for prop in surviving['properties'] if prop['name'] != NAME_RESOLUTION_PROPERTY
+            ]
+
+
+def finalize_components(components):
+    """Re-render the evidence-derived properties and drop the collection-time key.
+
+    Called once per document at the render boundary rather than in any collection function:
+    collection functions nest — the transitive walk folds across what the per-subtree collector
+    returns — so a pass that must observe the completed state of a document belongs where the
+    document is rendered. Idempotent, and it never touches a component that carries no evidence,
+    which is every internal component.
+    """
+    for component in components:
+        evidence = component.pop(EVIDENCE_KEY, None)
+        if evidence is None:
+            continue
+        _set_property(component, 'sourceCodeReferences', ';'.join(sorted(set(evidence['direct']))))
+        indirect = sorted(set(evidence['indirect']))
+        if indirect:
+            _set_property(component, 'indirectExposureCount', str(len(indirect)))
+            _set_property(component, 'indirectExposurePaths', ';'.join(
+                sorted('/'.join(d.split('/')[0:4]) for d in indirect)))
+        if evidence['superseded']:
+            _set_property(component, SUPERSEDED_PROPERTY, ';'.join(sorted(evidence['superseded'])))
+
+
 def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
     """
     Example data of an element:
@@ -629,7 +783,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
         v = extract_version(elem)
         if v is None:
             v = ''
-        ref, purl_properties = purl_for(elem, v)
+        ref, repaired_name, purl_properties = resolved_purl(elem, v)
 
         direct_deps, indirect_deps = produce_source_code_references(elem, external_root)
         direct_deps_paths = ';'.join(sorted(direct_deps))
@@ -651,7 +805,7 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
             custom_properties.append({'name': 'indirectExposurePaths', 'value': ';'.join(sorted(abstracted_indirect))})
 
         component = {
-            'name': clean_name(elem.name),
+            'name': repaired_name if repaired_name is not None else clean_name(elem.name),
             'version': v,
             'bom-ref': ref,
             'purl': ref,
@@ -659,7 +813,14 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
             'licenses': licenses,
             'scope': 'required',
             'properties': custom_properties,
-            'description': ''
+            'description': '',
+            # Raw paths, not the rendered strings: indirectExposurePaths is truncated to four
+            # segments, so no string-level merge could recover the elements or count them.
+            EVIDENCE_KEY: {
+                'direct': list(direct_deps),
+                'indirect': list(indirect_deps),
+                'superseded': []
+            }
         }
         output.append(component)
     else:
@@ -671,78 +832,13 @@ def elem_as_bom_data(elem, other_externals_by_name, external_root, noisy=False):
                 other_excluding_parent = list(
                     filter(lambda x: x != elem.parent,
                            other_externals_by_name[clean_name(elem.name)]))
-                if len(other_excluding_parent) > 1:
-                    if noisy:
-                        sys.stderr.write(f'Processing {elem.getPath()} Other similarly named exists  : \n')
+                if len(other_excluding_parent) > 1 and noisy:
+                    sys.stderr.write(
+                        f'Processing {elem.getPath()} Other similarly named exists  : \n')
                     for e in other_excluding_parent:
                         sys.stderr.write('  - ' + e.getPath() + '\n')
 
     return output
-
-
-def contains_incoming_ea_from_elems(e, elem_patterns):
-    for association in e.incoming:
-        for pat in elem_patterns:
-            if pat in association.fromElement.name:
-                return True
-    return False
-
-
-def combine_elems(elem, other_externals_by_name):
-    if not valid_for_bom(elem):
-        dep_summary = defaultdict(int)
-        pkg_deps = defaultdict(int)
-        for association in elem.incoming:
-            if association.deptype != 'new' and association.deptype != 'inherits':
-                pkg_deps[(file_extension(association.fromElement), association.deptype)] += 1
-            dep_summary[(file_extension(association.fromElement), association.deptype)] += 1
-
-        if len(other_externals_by_name[clean_name(elem.name)]) > 1:
-            other_excluding_parent = list(
-                filter(lambda x: x != elem.parent, other_externals_by_name[clean_name(elem.name)]))
-            if len(other_excluding_parent) > 1:
-                sys.stderr.write('Other similarly named exists     : ')
-
-                all_n = other_excluding_parent
-                for e in other_excluding_parent:
-                    sys.stderr.write('  - ' + e.getPath() + ' ')
-                    dep_summary_1 = defaultdict(int)
-                    for association in e.incoming:
-                        dep_summary_1[(file_extension(
-                            association.fromElement), association.deptype)] += 1
-                    sys.stderr.write('     * ' + str(dict(dep_summary_1)) + ' ')
-                    for d in dep_summary_1:
-                        e.attrs.setdefault('user_exts', set()).add(d[0])
-
-                while len(all_n) > 1:
-                    under_ext = None
-                    better_place = None
-                    for e in all_n:
-                        if e.parent.name == 'External':
-                            under_ext = e
-                        else:
-                            if better_place is not None and len(e.getPath()) > len(
-                                    better_place.getPath()):
-                                better_place = e
-                            elif better_place is None:
-                                better_place = e
-                    if under_ext is None and better_place:
-                        for n in all_n:
-                            if n != better_place and n.parent == better_place.parent:
-                                under_ext = n
-                    if under_ext and better_place:
-                        if better_place.parent.name == 'PIP' and contains_incoming_ea_from_elems(
-                                under_ext, ['Dockerfile', '.py']):
-                            print('MERGING:'
-                                  '  ' + better_place.getPath() + ' another elem ' +
-                                  under_ext.getPath())
-                            better_place.merge(under_ext)
-                            all_n.remove(under_ext)
-                        else:
-                            print(better_place.getPath())
-                            break
-                    else:
-                        break
 
 
 def analyze_3rdparty(external_root, sbom):
@@ -752,23 +848,17 @@ def analyze_3rdparty(external_root, sbom):
         elem = stack.pop(0)
         other_externals_by_name.setdefault(clean_name(elem.name), []).append(elem)
         stack += elem.children
-    """
-    stack = list(external_elem.children)
-    while stack:
-        elem = stack.pop(0)
-        combine_elems(elem, other_externals_by_name)
-        stack += elem.children
-    """
-
     stack = list(external_root.children)
-    seen_refs = set()
+    surviving_component_by_key = {}
     while stack:
         elem = stack.pop(0)
         for bom_component in elem_as_bom_data(elem, other_externals_by_name, external_root):
             key = dedup_key(bom_component['bom-ref'])
-            if key not in seen_refs:
-                seen_refs.add(key)
+            if key not in surviving_component_by_key:
+                surviving_component_by_key[key] = bom_component
                 sbom.components.append(bom_component)
+            else:
+                merge_component_evidence(surviving_component_by_key[key], bom_component)
         stack += elem.children
 
 
@@ -864,6 +954,9 @@ class SBOM:
         data['metadata']['timestamp'] = datetime.now().isoformat() + 'Z'
 
         data['metadata']['component'] = self.metadata_component
+        # Everything in this list is now final: the evidence collected while components were
+        # folded is rendered into properties here, once, where every document passes.
+        finalize_components(self.components)
         data['components'] = self.components
 
         # RFC-4122: ^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
@@ -962,10 +1055,14 @@ def deptype_base(deptype):
 # How much data stands behind each entry differs sharply, and the difference matters before a
 # green test suite is read as evidence about real models. Measured across the stored model
 # corpus, 'packagejson' — written by the npm audit analyzer — and 'package_reference' — written
-# by the .NET analyzer — carry every External -> External edge that exists. 'pip' is emitted by
-# the pip lockfile analyzer but resolves no package-to-package edge in that corpus yet, and
-# 'packagelock' is emitted by an analyzer shipping alongside this converter, so neither is
-# exercised by stored data today.
+# by the .NET analyzer — carry every External -> External edge in the models produced before the
+# lockfile analyzers ran. On models produced with the production analyzer set (2026-08) the
+# anticipatory entries turned out to be right: 'packagelock' carries 1 581 edges,
+# 'dev_packagelock' 410 and 'pip' 208, every one of them covered by this registry and the
+# uncovered set empty. The 410 dev_packagelock edges are the first real evidence that
+# deptype_base's dev_ handling is load-bearing rather than anticipatory. What has not changed is
+# the point: a green test suite is not evidence about real models, and each entry below still
+# differs sharply in how much data stands behind it.
 #
 # 'pubspec' is anticipatory, deliberately kept. A deptype here names the MANIFEST that declared
 # the edge, and the same name covers both the file -> package edge and the package -> package
@@ -1064,6 +1161,7 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
     # dedup key -> the bom-ref spelling that survived under it, and element -> that same ref, so
     # an element met twice is described once and always by the surviving spelling.
     surviving_ref_by_key = {}
+    surviving_component_by_key = {}
     ref_by_element = {}
     edges = []
     seen_edges = set()
@@ -1074,20 +1172,26 @@ def _collect_3rdparty_for_subtree(subtree_root, external_root, other_externals_b
             return ref_by_element[elem]
         ref = None
         for component in elem_as_bom_data(elem, other_externals_by_name, external_root):
-            key = dedup_key(component['bom-ref'])
-            if key in surviving_ref_by_key:
-                ref = surviving_ref_by_key[key]
-                continue
-            surviving_ref_by_key[key] = component['bom-ref']
             # Depth is published only in closure mode. Tagging depth 1 unconditionally would
             # change every existing default-mode BOM, which is exactly what the opt-in exists to
             # prevent; tagging nothing at depth 1 in closure mode would leave a consumer reading
             # an absent property as if it meant "direct". So: all components or none.
+            #
+            # Attached BEFORE the fold decides, so a discarded duplicate carries a depth for the
+            # merge to compare. Previously it was attached only to survivors, which made "the
+            # primitive received something to compare" a per-site accident rather than a contract.
             if transitive_externals:
                 component.setdefault('properties', []).append({
                     'name': DEPENDENCY_DEPTH_PROPERTY,
                     'value': str(depth)
                 })
+            key = dedup_key(component['bom-ref'])
+            if key in surviving_ref_by_key:
+                merge_component_evidence(surviving_component_by_key[key], component)
+                ref = surviving_ref_by_key[key]
+                continue
+            surviving_ref_by_key[key] = component['bom-ref']
+            surviving_component_by_key[key] = component
             components.append(component)
             ref = component['bom-ref']
         if ref is not None:
@@ -1471,7 +1575,7 @@ def _transitive_components_and_dependencies(root_path, gen_elem_by_path, orig_el
                     })
                 components.append(component)
             else:
-                _keep_the_shorter_depth(surviving_component_by_key[key], component)
+                merge_component_evidence(surviving_component_by_key[key], component)
             refs.append(surviving_ref_by_key[key])
 
         # Both ends of a hop take the same canonicalization the refs above take. A hop is
