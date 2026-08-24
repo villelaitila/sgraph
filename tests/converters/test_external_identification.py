@@ -452,6 +452,138 @@ def test_no_generator_path_attaches_the_summary(generate):
         assert 'properties' not in document['metadata']
 
 
+def ledger_state(elements_walked, could_not_identify):
+    """The only two ledger fields coverage_compositions reads, in the real report's shape.
+
+    Hand-built so the grid below can reach states no small model produces. The test above it
+    checks this shape against a real report, because a synthetic input that drifted from reality
+    would let the grid pass while proving nothing about the function in use.
+    """
+    ident = identification()
+    return {
+        'ledger': {
+            'elementsWalked': elements_walked,
+            'outcomes': {
+                ident.OUTCOME_COVERED_ELSEWHERE: {
+                    'elementCount': 0
+                },
+                ident.OUTCOME_NOT_A_PACKAGE: {
+                    'elementCount': 0
+                },
+                ident.OUTCOME_VERSION_UNKNOWN_BY_DESIGN: {
+                    'elementCount': 0
+                },
+                ident.OUTCOME_COULD_NOT_IDENTIFY: {
+                    'elementCount': could_not_identify
+                },
+            },
+        },
+    }
+
+
+def test_the_synthetic_ledger_matches_a_real_reports_shape():
+    """Guards the grid test: a hand-built report that drifted from the real one tests nothing."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/lodash', version='4.17.21', referenced_by='a.js')
+
+    real = identification().external_coverage_report(model)['ledger']
+    synthetic = ledger_state(1, 0)['ledger']
+
+    assert set(synthetic) <= set(real)
+    assert set(synthetic['outcomes']) == set(real['outcomes'])
+
+
+def test_unidentified_externals_make_the_assembly_incomplete():
+    """An external the walk saw and could not identify is exactly what 'incomplete' means."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/left-pad', referenced_by='a.js')
+
+    report = identification().external_coverage_report(model)
+    compositions = identification().coverage_compositions(report, '/Org')
+
+    assert [composition['aggregate'] for composition in compositions] == ['incomplete']
+    assert compositions[0]['assemblies'] == ['/Org']
+
+
+def test_an_estate_whose_externals_all_identified_is_unknown_not_complete():
+    """Everything seen was identified. Whether everything was SEEN is a different question."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/lodash', version='4.17.21', referenced_by='a.js')
+
+    report = identification().external_coverage_report(model)
+    compositions = identification().coverage_compositions(report, '/Org')
+
+    assert [composition['aggregate'] for composition in compositions] == ['unknown']
+
+
+def test_a_model_with_no_externals_makes_no_completeness_claim():
+    """Nothing was walked, so there is no basis for a claim — not even a best-effort one.
+
+    A model with no External subtree cannot distinguish 'this estate depends on nothing' from
+    'no dependency analyzer ran', and 'unknown' would assert the best effort that 'not_specified'
+    correctly declines to assert.
+    """
+    model = SGraph(SElement(None, ''))
+    model.createOrGetElementFromPath('/Org/repoA/src/a.js')
+
+    report = identification().external_coverage_report(model)
+    compositions = identification().coverage_compositions(report, '/Org')
+
+    assert [composition['aggregate'] for composition in compositions] == ['not_specified']
+
+
+def test_no_ledger_state_can_claim_the_assembly_is_complete():
+    """'complete' asserts no further components are KNOWN to exist. The ledger cannot support it.
+
+    The ledger proves that every element the walk SAW was classified. It never proves the analyzer
+    saw everything: the corpus these categories were measured on was produced without two lockfile
+    analyzers that production runs. Claiming completeness makes a consumer stop looking, which is
+    the dangerous direction for a security artifact, so the strongest claim available here is the
+    enum's own 'unknown'.
+    """
+    for elements_walked in (0, 1, 7, 79633):
+        for could_not_identify in (0, 1, 3, 983):
+            report = ledger_state(elements_walked, could_not_identify)
+            aggregates = [
+                composition['aggregate']
+                for composition in identification().coverage_compositions(report, '/Org')
+            ]
+            assert 'complete' not in aggregates, (elements_walked, could_not_identify)
+
+
+def test_a_composition_carries_only_keys_cyclonedx_defines():
+    """CycloneDX sets additionalProperties:false on a composition, so an extra key is invalid.
+
+    Enumerated from bom-1.7.schema.json, the specVersion this generator declares. 'aggregate' is
+    the only required member, which is why it is asserted separately rather than by set equality.
+    """
+    defined = {'bom-ref', 'aggregate', 'assemblies', 'dependencies', 'vulnerabilities', 'signature'}
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/left-pad', referenced_by='a.js')
+
+    report = identification().external_coverage_report(model)
+
+    for composition in identification().coverage_compositions(report, '/Org'):
+        assert 'aggregate' in composition
+        assert set(composition) <= defined, sorted(set(composition) - defined)
+
+
+def test_a_composition_with_no_subject_omits_assemblies():
+    """assemblies must reference a bom-ref in the SAME document; with no subject there is none.
+
+    An empty assemblies array would be worse than an absent one: it reads as 'these zero
+    components are incomplete' rather than 'the subject was not named'.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/left-pad', referenced_by='a.js')
+
+    report = identification().external_coverage_report(model)
+    compositions = identification().coverage_compositions(report)
+
+    assert compositions[0]['aggregate'] == 'incomplete'
+    assert 'assemblies' not in compositions[0]
+
+
 def test_a_registry_root_never_produces_a_subpath():
     """Subpaths are an IMPORT_GRAPH concept and do not exist under a pure registry root.
 

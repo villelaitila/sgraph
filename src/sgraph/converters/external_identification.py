@@ -83,6 +83,13 @@ PACKAGE_CLAIMING_CATEGORIES = frozenset({
 SUMMARY_PROPERTIES = ('coverageComponentsEmitted', 'coverageNotAPackage',
                       'coverageVersionUnknownByDesign', 'coverageCouldNotIdentify')
 
+# Composition aggregate values, from bom-1.7.schema.json — the specVersion this generator
+# declares. Three of the ten are reachable from a coverage ledger; the reasoning for which three,
+# and for the one that is deliberately unreachable, is in coverage_compositions.
+AGGREGATE_INCOMPLETE = 'incomplete'
+AGGREGATE_UNKNOWN = 'unknown'
+AGGREGATE_NOT_SPECIFIED = 'not_specified'
+
 
 def _external_root(model):
     stack = list(model.rootNode.children)
@@ -464,6 +471,45 @@ def render_coverage_report(report):
     if report['externalsDeclaredButNothingEmitted']:
         lines.append('  ALARM: externals were declared and no component was emitted')
     return lines
+
+
+def coverage_compositions(report, subject_ref=None):
+    """The completeness claim, in the slot CycloneDX defines for it.
+
+    The four counts stay in metadata properties, because a composition holds `aggregate`,
+    `assemblies`, `dependencies` and `vulnerabilities` and nothing else — a ten-category taxonomy
+    with counts and samples has no home here, and the schema sets additionalProperties:false so
+    inventing one is invalid rather than merely unconventional. What DOES belong here is the one
+    thing a custom property cannot say in a vocabulary consumers already read: whether this
+    document's third-party assembly is complete.
+
+    **'complete' is unreachable by construction, and that is a limit rather than an omission.**
+    The enum defines it as "no further relationships ... are KNOWN to exist". The ledger proves
+    only that every element the walk SAW was classified; it never proves the analyzer saw
+    everything, and between those two lies every dependency an unrun analyzer would have found.
+    Claiming completeness makes a consumer stop looking, which is the dangerous direction for a
+    security artifact, so the strongest honest claim is the enum's own 'unknown' — "a best-effort
+    ... but the completeness is inconclusive". A test asserts no ledger state reaches 'complete'.
+
+    An empty walk is 'not_specified' rather than 'unknown': with no External subtree the model
+    cannot distinguish "this estate depends on nothing" from "no dependency analyzer ran", and
+    'unknown' would assert the best effort that 'not_specified' correctly declines to assert.
+
+    subject_ref names the component whose assembly this describes. Omitted rather than empty when
+    there is none: `assemblies: []` reads as "these zero components are incomplete", while an
+    absent key reads as "the subject was not named", which is what is true.
+    """
+    ledger = report['ledger']
+    if not ledger['elementsWalked']:
+        aggregate = AGGREGATE_NOT_SPECIFIED
+    elif ledger['outcomes'][OUTCOME_COULD_NOT_IDENTIFY]['elementCount']:
+        aggregate = AGGREGATE_INCOMPLETE
+    else:
+        aggregate = AGGREGATE_UNKNOWN
+    composition = {'aggregate': aggregate}
+    if subject_ref is not None:
+        composition['assemblies'] = [subject_ref]
+    return [composition]
 
 
 def attach_coverage_summary(document, report):
