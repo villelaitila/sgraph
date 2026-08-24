@@ -27,15 +27,21 @@ PHASE 2 - Complete release (after PR is merged):
     3. Create and push git tag
     4. Build distribution packages
     5. Upload to PyPI (requires twine)
-    6. Create GitHub release (requires gh CLI)
+    6. Install the published package from PyPI and verify it imports and is
+       complete, before it is announced (--skip-verification opts out)
+    7. Create GitHub release (requires gh CLI)
 """
 
 import argparse
 import configparser
+import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -46,10 +52,12 @@ class ReleaseError(Exception):
 
 
 class ReleaseAutomation:
-    def __init__(self, dry_run: bool = False, allow_uncommitted_changes: bool = False, skip_confirmation: bool = False):
+    def __init__(self, dry_run: bool = False, allow_uncommitted_changes: bool = False,
+                 skip_confirmation: bool = False, skip_verification: bool = False):
         self.dry_run = dry_run
         self.allow_uncommitted_changes = allow_uncommitted_changes
         self.skip_confirmation = skip_confirmation
+        self.skip_verification = skip_verification
         self.repo_root = Path(__file__).parent.parent.absolute()
         self.setup_cfg = self.repo_root / "setup.cfg"
 
@@ -318,6 +326,123 @@ class ReleaseAutomation:
             "--skip-existing"
         ], capture=False)
 
+    # Retry schedule for the post-upload install. PyPI accepts an upload before every
+    # index replica serves it, so the first attempt can legitimately resolve nothing.
+    PROPAGATION_DELAYS = (5, 10, 20, 30)
+
+    # Probe run inside the throwaway virtualenv. It reports what was actually installed
+    # rather than what the release believes it published.
+    PROBE = (
+        "import json, sys, importlib.metadata, pathlib;"
+        "import sgraph;"
+        "root = pathlib.Path(sgraph.__file__).parent;"
+        "subs = sorted(d.name for d in root.iterdir()"
+        " if d.is_dir() and (d / '__init__.py').exists());"
+        "print(json.dumps({'version': importlib.metadata.version('sgraph'),"
+        " 'subpackages': subs}))"
+    )
+
+    def _venv_python(self, venv_dir: str) -> str:
+        """Path to the interpreter inside a created virtualenv."""
+        if os.name == "nt":
+            return str(Path(venv_dir) / "Scripts" / "python.exe")
+        return str(Path(venv_dir) / "bin" / "python")
+
+    def _install_published_package(self, venv_python: str, version: str) -> None:
+        """Install the just-published distribution, tolerating index propagation lag.
+
+        --no-cache-dir is not hygiene. The distribution reached PyPI seconds ago, so a
+        cached index page predates it and resolves the new version to "no such version" --
+        which is indistinguishable from a failed upload unless the cache is bypassed.
+        """
+        last_error = None
+        for attempt, delay in enumerate((*self.PROPAGATION_DELAYS, None), start=1):
+            try:
+                self.run_command([venv_python, "-m", "pip", "install", "--no-cache-dir",
+                                  "--disable-pip-version-check", f"sgraph=={version}"])
+                return
+            except subprocess.CalledProcessError as e:
+                last_error = e
+                if delay is None:
+                    break
+                print(f"  not resolvable yet (attempt {attempt}); retrying in {delay}s")
+                time.sleep(delay)
+
+        raise ReleaseError(
+            f"sgraph=={version} could not be installed from PyPI after "
+            f"{len(self.PROPAGATION_DELAYS) + 1} attempts. The upload reported success, so "
+            f"either propagation is unusually slow or the distribution is unusable. "
+            f"Last error: {last_error}")
+
+    def _check_installed_report(self, report: dict, version: str,
+                                expected_subpackages: list[str]) -> None:
+        """Compare what was installed against what this release meant to publish.
+
+        Only absence of an expected subpackage is treated as a defect. A distribution
+        containing more than the source tree lists is a question for a human, not grounds
+        for aborting a release that has already happened.
+        """
+        installed = report.get("version")
+        if installed != version:
+            raise ReleaseError(
+                f"PyPI served sgraph {installed} when {version} was requested.")
+
+        missing = sorted(set(expected_subpackages) - set(report.get("subpackages", [])))
+        if missing:
+            raise ReleaseError(
+                f"The published distribution is missing subpackages present in src/sgraph: "
+                f"{', '.join(missing)}. This is a packaging configuration fault, and it ships "
+                f"silently -- the top-level import keeps working.")
+
+    def _source_subpackages(self) -> list[str]:
+        """Subpackages the source tree declares, as the expectation to measure against."""
+        src = self.repo_root / "src" / "sgraph"
+        if not src.is_dir():
+            return []
+        return sorted(d.name for d in src.iterdir()
+                      if d.is_dir() and (d / "__init__.py").exists())
+
+    def verify_published_package(self, version: str) -> None:
+        """Install what was published, from PyPI, and confirm it is usable.
+
+        Uploading and having uploaded something usable are different facts. twine reports
+        success when PyPI accepts the bytes, which says nothing about whether the
+        distribution installs or contains what it claims to. This step cannot undo the
+        upload -- nothing can -- but it can stop a broken artifact from being announced as
+        a release, and it turns a defect a user would have found into one the release finds.
+        """
+        print("\n=== Verifying the published package ===")
+
+        if self.skip_verification:
+            print("Skipped (--skip-verification).")
+            return
+
+        if self.dry_run:
+            print(f"[DRY RUN] Would install sgraph=={version} from PyPI into a temporary "
+                  f"virtualenv and import it")
+            return
+
+        expected = self._source_subpackages()
+        with tempfile.TemporaryDirectory(prefix="sgraph-release-verify-") as tmp:
+            venv_dir = str(Path(tmp) / "venv")
+            self.run_command([sys.executable, "-m", "venv", venv_dir])
+            venv_python = self._venv_python(venv_dir)
+
+            self._install_published_package(venv_python, version)
+
+            result = self.run_command([venv_python, "-c", self.PROBE])
+            try:
+                report = json.loads(result.stdout.strip().splitlines()[-1])
+            except (ValueError, IndexError) as e:
+                raise ReleaseError(
+                    f"The published package did not import cleanly: {e}. "
+                    f"Probe output: {result.stdout!r}")
+
+            self._check_installed_report(report, version, expected)
+
+        print(f"Verified: sgraph {version} installs from PyPI and imports, with all "
+              f"{len(expected)} subpackages present.")
+
     def create_github_release(self, version: str) -> None:
         """Create GitHub release with auto-generated notes."""
         print("\n=== Creating GitHub release ===")
@@ -428,6 +553,9 @@ class ReleaseAutomation:
             # Upload to PyPI
             self.upload_to_pypi()
 
+            # Confirm what was published is actually usable, before announcing it
+            self.verify_published_package(version)
+
             # Create GitHub release
             self.create_github_release(version)
 
@@ -503,12 +631,20 @@ Examples:
         help="Skip all confirmation prompts (useful for CI/CD)"
     )
 
+    parser.add_argument(
+        "--skip-verification",
+        action="store_true",
+        help="Do not install the published package from PyPI to verify it "
+             "(phase 2; use only when the network is unavailable)"
+    )
+
     args = parser.parse_args()
 
     automation = ReleaseAutomation(
         dry_run=args.dry_run,
         allow_uncommitted_changes=args.allow_uncommitted_changes,
-        skip_confirmation=args.yes
+        skip_confirmation=args.yes,
+        skip_verification=args.skip_verification
     )
 
     if args.complete:

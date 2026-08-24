@@ -216,12 +216,15 @@ class TestCompleteReleaseOrdering:
                           side_effect=lambda: calls.append("dist") or True), \
              patch.object(ReleaseAutomation, 'upload_to_pypi',
                           side_effect=lambda: calls.append("upload")), \
+             patch.object(ReleaseAutomation, 'verify_published_package',
+                          side_effect=lambda v: calls.append("verify")), \
              patch.object(ReleaseAutomation, 'create_github_release',
                           side_effect=lambda v: calls.append("release")):
             self.automation.complete_release("1.0.0")
 
         assert calls.index("validate") < calls.index("tag")
-        assert calls == ["validate", "sync", "tag", "build", "dist", "upload", "release"]
+        assert calls == ["validate", "sync", "tag", "build", "dist", "upload", "verify",
+                         "release"]
 
     def test_failing_tooling_check_prevents_tagging(self):
         """When the preflight fails, nothing irreversible may run."""
@@ -236,3 +239,171 @@ class TestCompleteReleaseOrdering:
         mock_sync.assert_not_called()
         mock_tag.assert_not_called()
         mock_build.assert_not_called()
+
+
+class TestVerifyPublishedPackage:
+    """Tests for verification of what actually reached PyPI.
+
+    Uploading and having uploaded something usable are different facts. The upload step
+    reports success when PyPI accepts the bytes, which says nothing about whether the
+    distribution installs, imports, or contains the subpackages it claims to -- a packaging
+    misconfiguration ships silently and is discovered by a user, not by the release.
+    """
+
+    def setup_method(self):
+        self.automation = ReleaseAutomation(dry_run=False, skip_confirmation=True)
+
+    def test_install_disables_the_package_index_cache(self):
+        """A cache-disabling flag is mandatory, not hygiene.
+
+        The distribution reached PyPI seconds earlier, so any locally cached index page
+        predates it and resolves the new version to 'no such version'. Asserted because the
+        flag looks removable to anyone who has not seen that failure.
+        """
+        commands = []
+
+        def record(cmd, **kwargs):
+            commands.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(ReleaseAutomation, 'run_command', side_effect=record):
+            self.automation._install_published_package("/tmp/venv/bin/python", "1.2.3")
+
+        install = [c for c in commands if "install" in c]
+        assert len(install) == 1
+        assert "--no-cache-dir" in install[0]
+        assert "sgraph==1.2.3" in install[0]
+
+    def test_install_retries_while_pypi_propagates(self):
+        """A miss immediately after upload is expected, not a failure.
+
+        PyPI serves the upload before every index replica reflects it, so the first attempt
+        can legitimately resolve nothing. Retrying distinguishes propagation lag from a
+        genuinely broken distribution; failing on the first attempt would report the former
+        as the latter on every release.
+        """
+        attempts = []
+
+        def flaky(cmd, **kwargs):
+            if "install" in cmd:
+                attempts.append(cmd)
+                if len(attempts) < 3:
+                    raise subprocess.CalledProcessError(1, cmd, stderr="No matching distribution")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(ReleaseAutomation, 'run_command', side_effect=flaky), \
+             patch('release.time.sleep') as mock_sleep:
+            self.automation._install_published_package("/tmp/venv/bin/python", "1.2.3")
+
+        assert len(attempts) == 3
+        assert mock_sleep.call_count == 2
+
+    def test_install_gives_up_and_raises(self):
+        """Retries are bounded. An unreachable distribution must end as a ReleaseError."""
+        def always_fails(cmd, **kwargs):
+            if "install" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No matching distribution")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(ReleaseAutomation, 'run_command', side_effect=always_fails), \
+             patch('release.time.sleep'):
+            with pytest.raises(ReleaseError):
+                self.automation._install_published_package("/tmp/venv/bin/python", "1.2.3")
+
+    def test_version_mismatch_is_rejected(self):
+        """Installing 'a' version is not the same as installing THE version."""
+        with pytest.raises(ReleaseError):
+            self.automation._check_installed_report({"version": "1.2.2", "subpackages": []},
+                                                    "1.2.3", expected_subpackages=[])
+
+    def test_missing_subpackage_is_rejected(self):
+        """The failure mode this step exists to catch.
+
+        A packaging misconfiguration drops a subpackage from the distribution while the
+        top-level import keeps working, so nothing complains until a user imports the part
+        that is not there.
+        """
+        with pytest.raises(ReleaseError) as excinfo:
+            self.automation._check_installed_report(
+                {"version": "1.2.3", "subpackages": ["algorithms", "converters"]},
+                "1.2.3",
+                expected_subpackages=["algorithms", "converters", "loader"])
+
+        assert "loader" in str(excinfo.value)
+
+    def test_a_matching_report_passes(self):
+        self.automation._check_installed_report(
+            {"version": "1.2.3", "subpackages": ["converters", "loader"]},
+            "1.2.3",
+            expected_subpackages=["loader", "converters"])
+
+    def test_extra_subpackages_do_not_fail(self):
+        """Only absence is a defect. A distribution shipping more than the source tree lists
+        is a question for a human, not a reason to abort a release that already happened."""
+        self.automation._check_installed_report(
+            {"version": "1.2.3", "subpackages": ["converters", "loader", "extra"]},
+            "1.2.3",
+            expected_subpackages=["loader", "converters"])
+
+    def test_skip_verification_does_no_network_work(self):
+        automation = ReleaseAutomation(dry_run=False, skip_confirmation=True,
+                                       skip_verification=True)
+        with patch.object(ReleaseAutomation, 'run_command') as mock_run:
+            automation.verify_published_package("1.2.3")
+        mock_run.assert_not_called()
+
+    def test_dry_run_does_no_network_work(self):
+        automation = ReleaseAutomation(dry_run=True)
+        with patch.object(ReleaseAutomation, 'run_command') as mock_run:
+            automation.verify_published_package("1.2.3")
+        mock_run.assert_not_called()
+
+
+class TestVerificationOrdering:
+    """Where verification sits in the sequence decides what it can still protect."""
+
+    def setup_method(self):
+        self.automation = ReleaseAutomation(dry_run=False, skip_confirmation=True)
+
+    def test_verification_runs_after_upload_and_before_the_github_release(self):
+        """Verification cannot prevent the upload -- that is irreversible by the time it runs.
+
+        What it can still prevent is announcing a broken artifact as a release, so it belongs
+        between the two rather than at the end.
+        """
+        calls = []
+
+        with patch.object(ReleaseAutomation, 'validate_release_tooling',
+                          side_effect=lambda: calls.append("validate")), \
+             patch.object(ReleaseAutomation, 'sync_with_upstream',
+                          side_effect=lambda: calls.append("sync")), \
+             patch.object(ReleaseAutomation, 'create_git_tag',
+                          side_effect=lambda v: calls.append("tag")), \
+             patch.object(ReleaseAutomation, 'build_distribution',
+                          side_effect=lambda: calls.append("build")), \
+             patch.object(ReleaseAutomation, 'check_dist_contents',
+                          side_effect=lambda: calls.append("dist") or True), \
+             patch.object(ReleaseAutomation, 'upload_to_pypi',
+                          side_effect=lambda: calls.append("upload")), \
+             patch.object(ReleaseAutomation, 'verify_published_package',
+                          side_effect=lambda v: calls.append("verify")), \
+             patch.object(ReleaseAutomation, 'create_github_release',
+                          side_effect=lambda v: calls.append("release")):
+            self.automation.complete_release("1.0.0")
+
+        assert calls.index("upload") < calls.index("verify") < calls.index("release")
+
+    def test_failed_verification_prevents_the_github_release(self):
+        with patch.object(ReleaseAutomation, 'validate_release_tooling'), \
+             patch.object(ReleaseAutomation, 'sync_with_upstream'), \
+             patch.object(ReleaseAutomation, 'create_git_tag'), \
+             patch.object(ReleaseAutomation, 'build_distribution'), \
+             patch.object(ReleaseAutomation, 'check_dist_contents', return_value=True), \
+             patch.object(ReleaseAutomation, 'upload_to_pypi'), \
+             patch.object(ReleaseAutomation, 'verify_published_package',
+                          side_effect=ReleaseError("import failed")), \
+             patch.object(ReleaseAutomation, 'create_github_release') as mock_release:
+            with pytest.raises(SystemExit):
+                self.automation.complete_release("1.0.0")
+
+        mock_release.assert_not_called()
