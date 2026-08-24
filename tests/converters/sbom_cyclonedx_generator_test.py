@@ -1895,7 +1895,9 @@ def test_nupkg_referenced_binary_is_typed_as_nuget():
 def test_wheel_and_egg_referenced_binary_is_typed_as_pypi():
     """.whl and .egg both name the Python ecosystem, whose purl type prohibits a namespace."""
     component = get_binary_refs_components()['PyBinary']
-    assert component['purl'] == 'pkg:pypi/PyBinary@1.2'
+    # Folded by A4: pypi is case_sensitive false, so PyBinary and pybinary are one package and
+    # the published spelling is the folded one. The element's name still reads PyBinary.
+    assert component['purl'] == 'pkg:pypi/pybinary@1.2'
     assert purl_type_resolution(component) == 'inferred from referencing file extension: egg,whl'
 
 
@@ -2908,7 +2910,7 @@ def test_a_scoped_tail_keeps_both_of_its_segments():
     installed package can only be '@rollup/pluginutils'.
     """
     component = one_component('NPM', '@rollup/plugin-node-resolve/@rollup/pluginutils', '5.3.0')
-    assert component['purl'] == 'pkg:npm/@rollup/pluginutils@5.3.0'
+    assert component['purl'] == 'pkg:npm/%40rollup/pluginutils@5.3.0'
 
 
 def test_a_deep_scoped_id_is_not_repaired_to_its_scope():
@@ -2928,7 +2930,7 @@ def test_a_deep_scoped_id_is_not_repaired_to_its_scope():
 
 def test_a_canonical_scoped_name_is_left_alone():
     """'@babel/core' is a package name, not an install path: two segments and a leading @."""
-    assert one_component('NPM', '@babel/core', '7.24.0')['purl'] == 'pkg:npm/@babel/core@7.24.0'
+    assert one_component('NPM', '@babel/core', '7.24.0')['purl'] == 'pkg:npm/%40babel/core@7.24.0'
 
 
 def test_a_plain_package_name_is_left_alone():
@@ -3513,3 +3515,138 @@ def test_source_code_references_contain_no_duplicate_paths():
 
     assert len(direct) == len(set(direct))
     assert len(indirect) == len(set(indirect))
+
+
+# --- purl canonicalization tests (A4) ---
+#
+# Narrowed against the primary source, types/*-definition.json, rather than against PURL-TYPES.rst
+# which it supersedes. npm says case_sensitive true and "the npm scope @ sign prefix is always
+# percent encoded"; pypi says case_sensitive false with underscore-to-dash, and scopes its dot rule
+# to distribution FILE names rather than to the name component; nuget says case_sensitive true, so
+# its 300 uppercase ids are spec-conforming and are left alone.
+#
+# A4 canonicalises the PURL only. The disclosed name keeps whatever the model said — the opposite
+# of A1, which rewrites the name because the name denoted nothing.
+
+
+def canonical_component(root, raw_name, version, attrs=None):
+    """Emit one external under a root and return the single component describing it."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.txt')
+    parent = model.createOrGetElementFromPath(f'/Org/External/{root}')
+    elem = SElement(parent, raw_name)
+    elem.attrs['version'] = version
+    for key, value in (attrs or {}).items():
+        elem.attrs[key] = value
+    SElementAssociation(app, elem, 'use').initElems()
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    assert len(components) == 1, components
+    return components[0]
+
+
+def test_the_canonicalization_is_a_recorded_migration():
+    """Records two published identifiers that CHANGE, in one place a reviewer can find.
+
+    1 224 refs move: 1 053 npm scopes gaining %40 and 171 pypi names folded. Written asserting the
+    values shipping today and updated in the commit that lands the change, so a consumer-visible
+    migration appears in the diff of a test rather than only in a release note.
+    """
+    assert canonical_component('NPM', '@angular/animation',
+                               '12.3.1')['purl'] == 'pkg:npm/%40angular/animation@12.3.1'
+    assert canonical_component('PIP', 'zope_interface',
+                               '5.4.0')['purl'] == 'pkg:pypi/zope-interface@5.4.0'
+
+
+def test_an_npm_scope_is_percent_encoded():
+    """The npm definition states the scope's @ prefix is always percent encoded."""
+    component = canonical_component('NPM', '@angular/animation', '12.3.1')
+
+    assert component['purl'] == 'pkg:npm/%40angular/animation@12.3.1'
+
+
+def test_only_a_leading_at_is_encoded():
+    """A yarn protocol alias puts an @ inside the VERSION, and encoding there would corrupt it.
+
+    'string-width-cjs': 'npm:string-width@^4.2.0' produces a version carrying both @ and a colon.
+    Nine components in the stored models look like this. The name is what A4 canonicalises, so the
+    rule is anchored to the name's leading character rather than to any @ in the string.
+    """
+    component = canonical_component('NPM', 'string-width-cjs', 'npm:string-width@^4.2.0')
+
+    assert component['purl'] == 'pkg:npm/string-width-cjs@npm:string-width@^4.2.0'
+
+
+def test_the_version_separator_is_never_encoded():
+    """The @ that separates a version is punctuation, not part of any name."""
+    component = canonical_component('NPM', '@babel/core', '7.24.0')
+
+    assert component['purl'].endswith('@7.24.0')
+    assert component['purl'].count('%40') == 1
+
+
+def test_a_pypi_name_is_lowercased_and_underscores_become_dashes():
+    """pypi is case_sensitive false and replaces underscore with dash."""
+    component = canonical_component('PIP', 'Zope_Interface', '5.4.0')
+
+    assert component['purl'] == 'pkg:pypi/zope-interface@5.4.0'
+
+
+def test_a_pypi_name_keeps_its_dots():
+    """The control on the ruling: purl scopes its dot rule to distribution FILE names.
+
+    PEP 503 collapses dots for internal matching and match_key applies that, so zope.interface
+    still matches zope-interface where matching is what is wanted. Publishing is the other
+    operation, and it keeps the dots.
+    """
+    component = canonical_component('PIP', 'zope.interface', '5.4.0')
+
+    assert component['purl'] == 'pkg:pypi/zope.interface@5.4.0'
+
+
+def test_an_npm_name_keeps_its_case():
+    """npm is case_sensitive true: old mixed-case packages were grandfathered in."""
+    component = canonical_component('NPM', 'JSONStream', '1.3.5')
+
+    assert component['purl'] == 'pkg:npm/JSONStream@1.3.5'
+
+
+def test_a_nuget_name_keeps_its_case():
+    """nuget is case_sensitive true, so the 300 uppercase ids in the corpus are conforming."""
+    component = canonical_component('Assemblies', 'Newtonsoft.Json', '13.0.3')
+
+    assert component['purl'] == 'pkg:nuget/Newtonsoft.Json@13.0.3'
+
+
+def test_the_disclosed_name_stays_raw_and_carries_no_provenance():
+    """A4 canonicalises the purl only, and the raw spelling is already disclosed in name.
+
+    The opposite of A1, which rewrites the name because the name denoted nothing and therefore
+    owes a provenance property. Here the model's spelling is still true, so a property on 1 224
+    rows would duplicate the name field for zero information.
+    """
+    component = canonical_component('PIP', 'Zope_Interface', '5.4.0')
+
+    assert component['name'] == 'Zope_Interface'
+    assert find_property(component, 'packageNameResolution') is None
+
+
+def test_two_pypi_spellings_become_one_component():
+    """Folding the published name makes two spellings of one package one row."""
+    model = SGraph(SElement(None, ''))
+    app = model.createOrGetElementFromPath('/Org/repoA/src/app.py')
+    parent = model.createOrGetElementFromPath('/Org/External/PIP')
+    for spelling in ('zope_interface', 'Zope_Interface'):
+        elem = SElement(parent, spelling)
+        elem.attrs['version'] = '5.4.0'
+        SElementAssociation(app, elem, 'use').initElems()
+
+    components = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+
+    assert [component['purl'] for component in components] == ['pkg:pypi/zope-interface@5.4.0']
+
+
+def test_a_golang_purl_is_untouched():
+    """golang ids contain separators and case that the definition does not license changing."""
+    component = canonical_component('Go', 'github.com/0xAX/notificator', '1.0.0')
+
+    assert component['purl'] == 'pkg:golang/github.com/0xAX/notificator@1.0.0'

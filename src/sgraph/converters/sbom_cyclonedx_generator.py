@@ -7,7 +7,8 @@ import sys
 from collections import Counter, defaultdict
 
 from sgraph import SGraph, SElement
-from sgraph.converters.external_root_semantics import repair_npm_package_name
+from sgraph.converters.external_root_semantics import (canonical_purl_name,
+                                                       repair_npm_package_name)
 
 # Fixed namespace for deterministic UUID v5 generation of SBOM serial numbers.
 SGRAPH_SBOM_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://softagram.com/sgraph/sbom")
@@ -125,8 +126,10 @@ FALLBACK_PURL_TYPE = 'generic'
 # Same rule, opposite outcomes, because the type definitions differ. pypi and gem also prohibit a
 # namespace, so whl/egg/gem are safe to infer.
 #
-# This table fixes the purl TYPE only. Package names are still emitted unencoded throughout this
-# module, so a spec-valid type does not by itself make a purl spec-conforming.
+# This table fixes the purl TYPE only. Names are now canonicalised where their definitions
+# license it — an npm scope's leading '@' is percent encoded and a pypi name is folded — but the
+# module still emits every other name unencoded, so a spec-valid type does not by itself make a
+# purl spec-conforming.
 PURL_TYPE_BY_REFERENCING_EXTENSION = {
     'dll': 'nuget',
     'exe': 'nuget',
@@ -173,8 +176,14 @@ DEFAULT_CYCLONEDX_TYPE = 'library'
 # fires, and generic names are opaque. Folding any of them would merge two distinct components
 # into one and lose a row — a worse defect than the duplicate it set out to remove.
 #
-# pypi also normalizes '_' to '-', which is deliberately NOT applied: that rewrites the name
-# rather than its case, and belongs with the percent-encoding migration that is still deferred.
+# pypi's '_' to '-' normalization IS now applied, at the point the purl is built, so pypi refs
+# arrive here already folded and this entry never changes one. It is retained as a guard for refs
+# constructed elsewhere — bom_ref's callers, and anything reading a stored purl — rather than as a
+# live fold. nuget's is the only fold that can still change a generator-built ref, because its names
+# are emitted with the casing the model gave them and its definition sets case_sensitive true. That
+# is a statement of capability, not of observation: measured across the stored models, the pypi fold
+# joins two spellings in two documents and the nuget fold joins none, despite some three hundred
+# mixed-case nuget ids — no two of them collide.
 CASE_INSENSITIVE_PURL_TYPES = {'nuget', 'pypi'}
 
 
@@ -204,9 +213,11 @@ def cyclonedx_component_type(purl):
 def dedup_key(bom_ref):
     """The identity under which two emitted components count as the same package.
 
-    Folds the key only. The emitted purl keeps whatever casing the model gave it, because
-    rewriting it to a folded form would change the identifier a consumer resolves — that is a
-    migration, not a deduplication, and it is not what this fix buys.
+    Folds the key only. For nuget the emitted purl still keeps whatever casing the model gave it,
+    because rewriting it would change the identifier a consumer resolves — that is a migration,
+    not a deduplication, and it was not what this fix bought. For pypi that migration has since
+    been made deliberately, with its own measurement and release note, so those refs arrive
+    already folded and this function finds nothing left to fold in them.
 
     .lower() rather than .casefold(): these type definitions are about ASCII case, and Unicode
     caseless matching would additionally merge names the ecosystems keep distinct.
@@ -498,6 +509,13 @@ def resolved_purl(elem, v):
                 'value': f'repaired from install path: {pkgid}'
             })
             pkgid = repaired_name
+
+    # Canonicalised ONCE, before the four returns below, rather than per branch: a purl type
+    # added later inherits the rule instead of needing its own copy. The id only — the component's
+    # 'name' field keeps whatever the model said, because the model's spelling is still true and a
+    # provenance property on 1 224 rows would duplicate a field that is already there. A1 is the
+    # opposite case: it rewrites the name, because there the name denoted nothing.
+    pkgid = canonical_purl_name(pkgtype, pkgid)
 
     # Both rules live here rather than in each branch above, so a purl type added later inherits
     # them. The maven branch returns before reaching this point and applies the unresolved rule

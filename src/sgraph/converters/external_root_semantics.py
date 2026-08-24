@@ -418,12 +418,19 @@ def canonical_purl_name(pkgtype, name):
     scoped by the spec to distribution FILE names, not to the name component, so dots are
     preserved here. npm and nuget are case-sensitive and are left alone.
 
+    npm is the opposite: case_sensitive true, because old mixed-case packages were grandfathered
+    in, and its definition states that the scope's leading '@' is always percent encoded. Only a
+    LEADING '@' — an '@' anywhere else belongs to something that is not a scope, and a yarn
+    protocol alias puts one in the version.
+
     Cross-reference: `match_key` is the OTHER operation and applies a wider rule. Publishing an
     identifier and matching two identifiers are not the same thing, and one function serving both
     would force a choice between a spec-conformant purl and a working join.
     """
     if pkgtype == 'pypi':
         return name.lower().replace('_', '-')
+    if pkgtype == 'npm' and name.startswith('@'):
+        return '%40' + name[1:]
     return name
 
 
