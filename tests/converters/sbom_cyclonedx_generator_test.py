@@ -3814,3 +3814,77 @@ def test_cli_rejects_coverage_with_a_multi_document_scope(tmp_path, scope):
     # passed on argparse's "unrecognized arguments: --coverage", which is a pass for the wrong
     # reason and would have survived the flag being wired to nothing.
     assert '--coverage cannot be combined with --level or --element-path' in proc.stderr
+
+
+def advisory_materialised(model, path):
+    """A version element the producer invented so a finding would have a parent.
+
+    softagram-live stamps version_kind='advisory_range' on these: the version segment of the name
+    holds an advisory's affected RANGE, and nothing is installed at it. Built here rather than
+    taken from a fixture because no stored model carries the attribute yet -- it is stamped by an
+    analyzer change that ships separately, which is exactly why absence must keep meaning
+    "installed".
+    """
+    elem = referenced_external(model, path)
+    elem.attrs['version_kind'] = 'advisory_range'
+    return elem
+
+
+def test_an_advisory_materialised_version_is_not_a_component():
+    """A range nothing is installed at is not inventory, so it must not be published as stock.
+
+    Emitting it asserts that the estate depends on `ws` at version '>=8.0.0 <8.21.0' -- a version
+    that exists in no registry and was never installed anywhere. The producer now says so; this
+    is the consumer honouring it.
+    """
+    model = SGraph(SElement(None, ''))
+    advisory_materialised(model, '/Org/External/NPM/ws/ws of version >=8.0.0 <8.21.0')
+
+    assert [component['name'] for component in admission_components(model)] == []
+
+
+def test_the_installed_version_beside_it_still_emits():
+    """Anti-vacuity, and the failure this guards is the expensive one.
+
+    A rule that suppressed the real release alongside the invented one would delete genuine
+    inventory from the document, and the deletion would look like an improvement because the
+    phantom count went to zero at the same time.
+    """
+    model = SGraph(SElement(None, ''))
+    advisory_materialised(model, '/Org/External/NPM/ws/ws of version >=8.0.0 <8.21.0')
+    referenced_external(model, '/Org/External/NPM/ws/ws of version 8.11.0')
+
+    assert [component['version'] for component in admission_components(model)] == ['8.11.0']
+
+
+def test_an_unrecognised_version_kind_still_emits():
+    """Only the value this rule reasoned about suppresses. Every other one is left alone.
+
+    'declared_range' is the intended next value, and it names a DIFFERENT population -- one
+    element per declaring dependent, every one of them carrying incoming edges. Suppressing on the
+    mere presence of the attribute would silently delete those the day the producer starts
+    stamping them, which is a behaviour change nobody asked for arriving through the back door.
+    """
+    model = SGraph(SElement(None, ''))
+    elem = referenced_external(model, '/Org/External/NPM/thenify/thenify of version >= 3.1.0 < 4')
+    elem.attrs['version_kind'] = 'declared_range'
+
+    assert [component['name'] for component in admission_components(model)] == ['thenify']
+
+
+def test_a_suppressed_advisory_row_is_referenced_nowhere_in_the_document():
+    """Removing a component must not leave a ref pointing at something no longer there.
+
+    Checked over the whole serialised document rather than over the component list, because a
+    dangling reference would sit in some other section -- dependencies, compositions, or an
+    externalReference -- and a component-list assertion would never see it.
+    """
+    import json
+
+    model = SGraph(SElement(None, ''))
+    advisory_materialised(model, '/Org/External/NPM/ws/ws of version >=8.0.0 <8.21.0')
+    referenced_external(model, '/Org/External/NPM/ws/ws of version 8.11.0')
+
+    document = json.dumps(sbom_cyclonedx_generator.generate_from_sgraph(model))
+
+    assert '>=8.0.0' not in document
