@@ -77,7 +77,9 @@ python scripts/release.py --bump patch --dry-run --allow-uncommitted-changes
 9. Creates a git tag (`vx.x.x`)
 10. Builds distribution packages
 11. Uploads to PyPI (with confirmation)
-12. Creates a GitHub release with auto-generated release notes from merged PRs
+12. Installs the published package from PyPI into a throwaway virtualenv and checks that it
+    imports and ships every subpackage present in `src/sgraph`
+13. Creates a GitHub release with auto-generated release notes from merged PRs
 
 ### Options
 
@@ -86,6 +88,8 @@ python scripts/release.py --bump patch --dry-run --allow-uncommitted-changes
 - `--dry-run`: Preview all actions without executing them (no changes made)
 - `--allow-uncommitted-changes`: Skip the uncommitted changes check (useful when testing or developing the script itself)
 - `--yes`, `-y`: Skip all confirmation prompts (useful for CI/CD automation)
+- `--skip-verification`: Do not install the published package to verify it. Use only when the
+  network is unavailable — it removes the only check that what reached PyPI is usable.
 
 ### Manual fallbacks
 
@@ -94,3 +98,20 @@ If `gh` is not available, the script will provide instructions for completing th
 A missing `setuptools`, `wheel` or `twine` is treated as an error rather than a warning: `--complete`
 pushes the git tag before it builds, so continuing without them would leave a published tag with no
 artifacts behind it.
+
+### Verifying the published package
+
+`twine` reports success when PyPI accepts the bytes, which says nothing about whether the
+distribution installs or contains what it claims to. Step 12 answers that separately: it installs
+`sgraph==<version>` from PyPI into a temporary virtualenv, imports it, and compares the subpackages
+that shipped against those in `src/sgraph`. A packaging misconfiguration that drops a subpackage
+leaves the top-level import working, so nothing else in the release would notice.
+
+It cannot undo the upload — nothing can. What it prevents is announcing a broken artifact as a
+release, which is why it runs between the upload and the GitHub release rather than at the end.
+
+The install passes `--no-cache-dir`. That is not hygiene: the distribution reached PyPI seconds
+earlier, so a cached index page predates it and resolves the new version to "no such version",
+which is indistinguishable from a failed upload. For the same reason the install is retried on a
+fixed schedule before it is treated as a failure, since PyPI serves an upload before every index
+replica reflects it.
