@@ -1908,6 +1908,11 @@ if __name__ == '__main__':
     parser.add_argument('--max-depth', type=int, default=None,
                         help='Deepest dependency depth to emit with --transitive-externals. '
                              'Without it the whole closure is emitted.')
+    parser.add_argument('--coverage', action='store_true',
+                        help='State what the document does NOT cover: four metadata properties '
+                             'counting what was and was not identified under External, and a '
+                             'CycloneDX composition saying whether the third-party assembly is '
+                             'complete. Single-document mode only.')
     args = parser.parse_args()
 
     if args.transitive and args.level is None and args.element_path is None:
@@ -1920,6 +1925,12 @@ if __name__ == '__main__':
 
     if args.max_depth is not None and not args.transitive_externals:
         parser.error('--max-depth requires --transitive-externals')
+
+    # The coverage report is MODEL-WIDE. Attached to a per-element SBOM it would claim that this
+    # document's third-party assembly is incomplete because some other subtree's is, which is a
+    # statement the document carries no evidence for. Rejected rather than emitted with a caveat.
+    if args.coverage and (args.level is not None or args.element_path is not None):
+        parser.error('--coverage cannot be combined with --level or --element-path')
 
     # Checked here as well as in the generators, so the message names the flag that was typed
     # rather than the parameter it maps to, and exits the way every other CLI misuse exits.
@@ -1939,6 +1950,17 @@ if __name__ == '__main__':
                                             max_depth=args.max_depth)
     else:
         result = generate_from_sgraph(g)
+        if args.coverage:
+            # Imported here rather than at module level, and the local import IS the design: this
+            # module must not depend on external_identification, which imports it. The generator
+            # emits; the report reads what was emitted. A CLI is the composition above both, and
+            # is the one place entitled to know about each.
+            from sgraph.converters.external_identification import (attach_coverage_compositions,
+                                                                   attach_coverage_summary,
+                                                                   external_coverage_report)
+            report = external_coverage_report(g)
+            attach_coverage_summary(result, report)
+            attach_coverage_compositions(result, report)
 
     with open(args.output, 'w') as f:
         json.dump(result, f, indent=4)

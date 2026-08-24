@@ -404,9 +404,52 @@ document's own subject, and not a 3rd-party package. It appears as a component m
   several hundred. That is the number of dependencies that directory genuinely has, not a
   closure being walked; if it is more than you want, export at a coarser level.
 - An element that publishes **several** packages with nothing to choose between them is given no
-  identity at all: it keeps the element name and an empty purl. No coordinates are invented.
+  identity at all: it keeps the element name and carries **no `purl` key**. No coordinates are
+  invented. (Before 1.13.0 the key was present and empty, which CycloneDX types as an
+  iri-reference and the empty string is not one.)
 - Components describing internal packages carry **no** `dependencyDepth`. That property counts
   package hops through the 3rd-party closure, and an element of the estate is not one.
+
+### What the document does not cover
+
+A component list cannot say what is missing from it. An external the analyzer saw and the
+generator could not identify leaves no trace, so a consumer cannot tell "this estate depends on
+nothing else" from "we could not identify the rest".
+
+`--coverage` says it, in single-SBOM mode:
+
+```bash
+python -m sgraph.converters.sbom_cyclonedx_generator model.xml sbom.json --coverage
+```
+
+It adds two things. Four `metadata.properties` counting what was and was not identified under
+`External` — components emitted, not a package, version unknown by design, could not identify —
+and one `compositions` entry stating whether the third-party assembly is complete:
+
+```json
+"compositions": [{ "aggregate": "incomplete", "assemblies": ["/Org"] }]
+```
+
+| `aggregate` | When |
+|-------------|------|
+| `incomplete` | Externals were seen that could not be identified. |
+| `unknown` | Everything seen was identified. Whether everything was *seen* is a different question. |
+| `not_specified` | No `External` subtree at all, so there is no basis for a claim. |
+
+- **`complete` is never emitted.** CycloneDX defines it as "no further relationships ... are
+  KNOWN to exist". The report proves only that every element the walk *saw* was classified, never
+  that the analyzer saw everything — an analyzer that was not run leaves no evidence that it was
+  missing. Claiming completeness makes a consumer stop looking, so the strongest honest claim is
+  `unknown`, which the specification defines as a best-effort whose completeness is inconclusive.
+- **Single-SBOM mode only.** The report is model-wide, so attaching it to a `--level` or
+  `--element-path` document would claim that *that* document's assembly is incomplete because some
+  other subtree's is. `--coverage` combined with either is refused rather than emitted with a
+  caveat.
+- **Opt-in.** Without the flag the document is exactly what earlier releases produced.
+- The four counts are properties rather than part of the composition because a composition holds
+  `aggregate`, `assemblies`, `dependencies` and `vulnerabilities` and nothing else. Completeness
+  fits the standard; a ten-category taxonomy with counts and samples does not.
+
 
 ### Where an element lives
 

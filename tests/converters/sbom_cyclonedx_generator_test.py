@@ -3727,3 +3727,90 @@ def test_no_purl_key_anywhere_in_any_fixture_is_empty():
                 checked += 1
 
     assert checked > 0
+
+
+@pytest.mark.parametrize('fixture,subject,aggregate', [
+    ('modelfile_for_sbom_tests.xml', '/nginx', 'unknown'),
+    ('modelfile_for_sbom_emission_tests.xml', '/ExampleOrg', 'incomplete'),
+])
+def test_cli_coverage_flag_adds_the_completeness_claim(tmp_path, fixture, subject, aggregate):
+    """--coverage reaches the document through the CLI, in CycloneDX's own slot.
+
+    Both reachable outcomes are exercised, on fixtures measured to produce them: one whose
+    externals are all identified and one carrying an external that is not. A single fixture would
+    have pinned whichever state it happened to be in, and this one was in the quiet state -- the
+    flag could have been wired to a constant and still passed.
+
+    The subject is pinned rather than only compared against the document, because reading it out
+    of the same document it is asserted against cannot fail.
+    """
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), fixture)
+    out_path = tmp_path / 'sbom.json'
+    proc = subprocess.run([
+        sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator', model_path,
+        str(out_path), '--coverage'
+    ], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    document = json.loads(out_path.read_text())
+    assert document['metadata']['component']['bom-ref'] == subject
+    assert document['compositions'] == [{'aggregate': aggregate, 'assemblies': [subject]}]
+    from sgraph.converters.external_identification import SUMMARY_PROPERTIES
+    summary = {prop['name'] for prop in document['metadata']['properties']}
+    assert summary == set(SUMMARY_PROPERTIES)
+
+
+def test_cli_without_the_coverage_flag_adds_no_composition(tmp_path):
+    """Default-off through the CLI too, asserted rather than assumed.
+
+    The flag is the whole opt-in: a document produced without it must be what 1.13.0 produced,
+    so a consumer diffing two releases sees nothing they did not ask for.
+    """
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_tests.xml')
+    out_path = tmp_path / 'sbom.json'
+    proc = subprocess.run([
+        sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator', model_path,
+        str(out_path)
+    ], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    document = json.loads(out_path.read_text())
+    assert 'compositions' not in document
+    assert 'properties' not in document['metadata']
+
+
+@pytest.mark.parametrize('scope', [['--level', '3'], ['--element-path', '/Project/repoA']])
+def test_cli_rejects_coverage_with_a_multi_document_scope(tmp_path, scope):
+    """The coverage report is model-wide, so it cannot describe one document's assembly.
+
+    Attaching it to a per-element SBOM would claim that repoA's third-party assembly is
+    incomplete because repoB's is, which is a statement about a document that does not contain
+    the evidence for it. Rejected at the CLI the way every other unsupported combination is,
+    rather than emitted with a caveat nobody reads.
+    """
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    out_path = tmp_path / 'sboms.json'
+    proc = subprocess.run([
+        sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator', model_path,
+        str(out_path), '--coverage'
+    ] + scope, capture_output=True, text=True)
+
+    assert proc.returncode != 0
+    # The exact message, not merely the flag name: before the flag existed these assertions
+    # passed on argparse's "unrecognized arguments: --coverage", which is a pass for the wrong
+    # reason and would have survived the flag being wired to nothing.
+    assert '--coverage cannot be combined with --level or --element-path' in proc.stderr
