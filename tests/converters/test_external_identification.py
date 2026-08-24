@@ -942,3 +942,268 @@ def test_a_nested_jvm_maven_root_is_recognised():
 
     assert external_root_key(artifact) == 'JVM/Maven'
     assert ecosystem_of_root('JVM/Maven') == 'maven'
+
+
+# --- the H2 join: identity resolution, never emission (P4 / A8a) ---
+#
+# A package whose version is already in the model on a SECOND node is not a coverage failure, it
+# is a failure to connect two nodes. /External/Python/click carries no version and
+# /External/PIP/click/click of version 8.4.2 carries one; the BOM already contains the component,
+# so the join changes what the REPORT says and appends nothing to any document.
+#
+# A naive name join measured 12 % cross-ecosystem false positives, which is why every guard below
+# exists and why the gate asserts the zero rather than the total.
+
+
+def versioned_registry_package(model, root, name, version, referenced_by='a.py'):
+    """An emitting package under a registry root — the only shape a join may target."""
+    return external(model, f'{root}/{name}/{name} of version {version}', version=version,
+                    referenced_by=referenced_by)
+
+
+def join_records(model):
+    identification_module = identification()
+    index = identification_module.build_join_index(model)
+    internal = identification_module.internal_published_identities(model)
+    root = identification_module._external_root(model)
+    records = []
+    stack = list(root.children)
+    while stack:
+        elem = stack.pop()
+        stack += elem.children
+        record = identification_module.resolve_identity_by_join(elem, index, root, internal)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def test_an_unversioned_import_joins_its_versioned_registry_sibling():
+    """The H2 shape: the version is in the model, on a node the coverage walk treated separately."""
+    model = SGraph(SElement(None, ''))
+    imported = external(model, 'Python/click', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'click', '8.4.2')
+
+    records = join_records(model)
+
+    assert [record['element'] for record in records] == [imported.getPath()]
+    assert records[0]['coveringRef'] == 'pkg:pypi/click@8.4.2'
+    assert records[0]['ecosystem'] == 'pypi'
+
+
+def test_a_join_never_crosses_ecosystems():
+    """The guard that eliminates both measured false-positive classes, by construction.
+
+    /External/Python/yaml and an npm package called yaml are different packages that share a
+    string. Requiring both ecosystems to be equal AND non-None makes the join impossible rather
+    than unlikely, which is why the gate asserts zero cross-ecosystem joins rather than a rate.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/yaml', referenced_by='a.py')
+    versioned_registry_package(model, 'NPM', 'yaml', '2.9.0', referenced_by='b.js')
+
+    assert join_records(model) == []
+
+
+def test_a_docker_image_never_joins_a_python_import():
+    """An image named odoo and a python module named odoo share nothing but a string."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/odoo', referenced_by='a.py')
+    external(model, 'Docker/Image/odoo of tag 17', referenced_by='Dockerfile')
+
+    assert join_records(model) == []
+
+
+def test_an_import_alias_joins_its_distribution():
+    """import yaml installs PyYAML: the import name and the distribution name differ by design."""
+    model = SGraph(SElement(None, ''))
+    imported = external(model, 'Python/yaml', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'pyyaml', '6.0.2')
+
+    records = join_records(model)
+
+    assert [record['element'] for record in records] == [imported.getPath()]
+    assert records[0]['matchRule'] == 'alias:yaml'
+
+
+def test_an_alias_cannot_cross_ecosystems():
+    """The alias table is ecosystem-keyed, so a pypi alias can never resolve an npm name."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'NPM/yaml', referenced_by='a.js')
+    versioned_registry_package(model, 'PIP', 'pyyaml', '6.0.2')
+
+    assert join_records(model) == []
+
+
+def test_a_join_requires_the_covering_component_to_exist():
+    """A repair may only assert an identity the model corroborates.
+
+    Without a versioned sibling there is nothing to join to, and inventing the connection would
+    manufacture coverage out of a name.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/click', referenced_by='a.py')
+
+    assert join_records(model) == []
+
+
+def test_a_stdlib_root_never_joins():
+    """PythonLibs asserts no ecosystem, so stdlib dataclasses cannot reach PyPI's dataclasses.
+
+    That backport package is real, and an ecosystem for the stdlib namespace would make the join
+    legal. None makes it impossible rather than merely unlikely.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'PythonLibs/dataclasses', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'dataclasses', '0.8')
+
+    assert join_records(model) == []
+
+
+def test_an_install_path_joins_the_package_it_installs():
+    """The recovery the shared identity function buys: the install path IS that package.
+
+    Keyed on raw names this join could never happen, because the index would hold strip-ansi and
+    the element would ask for wrap-ansi-cjs/strip-ansi.
+    """
+    model = SGraph(SElement(None, ''))
+    install_path = external(model, 'NPM/wrap-ansi-cjs__slash__strip-ansi', referenced_by='a.js')
+    versioned_registry_package(model, 'NPM', 'strip-ansi', '6.0.1', referenced_by='b.js')
+
+    records = join_records(model)
+
+    assert [record['element'] for record in records] == [install_path.getPath()]
+    assert records[0]['coveringRef'] == 'pkg:npm/strip-ansi@6.0.1'
+
+
+def test_a_join_adds_no_component_and_changes_no_document():
+    """Invariant 2 by construction: the join resolves an identity and emits nothing.
+
+    Compared against the same model's document before the join is computed, field by field —
+    because 'report-only' is a claim about output, and only output can check it.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/click', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'click', '8.4.2')
+
+    before = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    snapshot = [sorted(component.items(), key=str) for component in before]
+
+    assert join_records(model)
+
+    after = sbom_cyclonedx_generator.generate_from_sgraph(model)['components']
+    assert [sorted(component.items(), key=str) for component in after] == snapshot
+
+
+def test_a_joined_element_moves_from_could_not_identify_to_covered_elsewhere():
+    """The join's whole visible effect: a residue row becomes a covered one."""
+    model = SGraph(SElement(None, ''))
+    joined = external(model, 'Python/click', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'click', '8.4.2')
+
+    report = identification().external_coverage_report(model)
+
+    assert category_of(report, joined.getPath()) == \
+        identification().CATEGORY_JOINED_TO_VERSIONED_SIBLING
+    assert report['categories'][
+        identification().CATEGORY_JOINED_TO_VERSIONED_SIBLING]['outcome'] == \
+        identification().OUTCOME_COVERED_ELSEWHERE
+
+
+def test_every_join_carries_an_evidence_record():
+    """A join nobody can audit is a claim, not a resolution.
+
+    One record per join, no more and no fewer, each naming the element, the covering ref, the
+    shared ecosystem and the rule that matched.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/click', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'click', '8.4.2')
+    external(model, 'Python/yaml', referenced_by='b.py')
+    versioned_registry_package(model, 'PIP', 'pyyaml', '6.0.2')
+
+    report = identification().external_coverage_report(model)
+    bucket = report['categories'][identification().CATEGORY_JOINED_TO_VERSIONED_SIBLING]
+
+    assert len(report['joins']) == bucket['elementCount']
+    for record in report['joins']:
+        assert set(record) >= {'element', 'coveringRef', 'ecosystem', 'matchRule', 'collisionRisk'}
+
+
+def test_a_join_onto_an_internally_published_name_is_flagged():
+    """The playwright shape: a first-party package sharing a name with a public one.
+
+    The estate publishes its own click, so resolving an unversioned import to the public package
+    may be wrong. The join still records it — suppressing it silently would be the same class of
+    error — and flags the risk for the collision detector to upgrade.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Python/click', referenced_by='a.py')
+    versioned_registry_package(model, 'PIP', 'click', '8.4.2')
+    internal = model.createOrGetElementFromPath('/Org/repoB/setup.py/click')
+    internal.attrs['package_name'] = 'click'
+    internal.attrs['ecosystem'] = 'pypi'
+
+    records = join_records(model)
+
+    assert len(records) == 1
+    assert records[0]['collisionRisk'] is True
+
+
+# --- image structure: four cases and a residual (P3h) ---
+
+
+def test_an_untagged_image_chain_is_not_a_package():
+    """A locally built image that was never tagged is a filesystem tree, not a list of packages.
+
+    Every element of the chain, not a sample: the clause this replaces fired on each of them
+    independently, so a sample would have passed while the rest of the tree stayed wrong.
+    build/app/package.json reported as a package the BOM failed to identify is the shape that
+    makes the error visible.
+    """
+    model = SGraph(SElement(None, ''))
+    chain = [
+        'Docker/Image/build', 'Docker/Image/build/app', 'Docker/Image/build/app/package.json',
+        'Docker/Image/build/app/node_modules', 'Docker/Image/build/app/src',
+        'Docker/Image/build/app/src/agents', 'Docker/Image/build/app/src/agents/templates'
+    ]
+    elements = [external(model, path, referenced_by='Dockerfile') for path in chain]
+
+    report = identification().external_coverage_report(model)
+
+    for element in elements:
+        assert category_of(report, element.getPath()) == \
+            identification().CATEGORY_NOT_A_PACKAGE_ROOT, element.getPath()
+    assert report['categories'][identification().CATEGORY_NOT_A_PACKAGE_ROOT]['subLabels'][
+        'untagged_image_chain']['elementCount'] == len(chain)
+
+
+def test_an_untagged_single_image_reference_is_still_an_identity():
+    """The control that stops this fix eating the genuinely untagged references.
+
+    FROM nginx is a real dependency with an implicit :latest, and there are eight of them. What
+    distinguishes the chain is that it is a CHAIN, not that it lacks a tag.
+    """
+    model = SGraph(SElement(None, ''))
+    single = external(model, 'Docker/Image/nginx', referenced_by='Dockerfile')
+
+    report = identification().external_coverage_report(model)
+
+    assert category_of(report, single.getPath()) == \
+        identification().CATEGORY_DOCKER_IMAGE_IDENTITY
+
+
+def test_an_element_matching_no_image_clause_is_reported_as_unknown():
+    """The residual arm, made reachable and then proved reachable.
+
+    The clause set this replaces was TOTAL, so its own 'report anything that matches nothing'
+    instruction could never fire. Here an untagged element sits beside a tagged sibling: no tagged
+    ancestor, no tag of its own, not a direct child, no tagged descendant, and its chain is not
+    untagged either. It matches nothing, and saying so is better than assigning a default.
+    """
+    model = SGraph(SElement(None, ''))
+    external(model, 'Docker/Image/head/a of tag v1', referenced_by='Dockerfile')
+    unmatched = external(model, 'Docker/Image/head/b', referenced_by='D2')
+
+    report = identification().external_coverage_report(model)
+
+    assert unmatched.getPath() in report['unclassifiedImageElements']

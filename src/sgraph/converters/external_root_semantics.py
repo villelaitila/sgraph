@@ -252,6 +252,13 @@ def is_stdlib_name(root_key, name):
     return False
 
 
+IMAGE_INSIDE = 'inside_image'
+IMAGE_IDENTITY = 'image_identity'
+IMAGE_NAME_SEGMENT = 'image_name_segment'
+IMAGE_UNTAGGED_CHAIN = 'untagged_image_chain'
+IMAGE_UNMATCHED = 'unmatched_image_element'
+
+
 def _tagged_ancestor_below_root(elem, root_depth):
     """Whether an ancestor strictly between elem and the image root carries a tag."""
     node = elem.parent
@@ -311,14 +318,11 @@ def role_of(elem, root_key, *, has_version, is_stdlib_name, has_package_evidence
     if KIND_FILESYSTEM in kinds:
         return ROLE_FILESYSTEM
     if KIND_IMAGE in kinds:
-        # ' of tag ' is a BOUNDARY marker, not an identity marker. Everything above it is part of
-        # the image's NAME — ghcr.io and astral-sh are segments of one name, not three images —
-        # and everything below it is the image's filesystem. Depth alone cannot express that,
-        # because a registry-qualified name is several segments long before the tag appears.
-        if _tagged_ancestor_below_root(elem, root_depth):
-            return ROLE_FILESYSTEM
-        if ' of tag ' in elem.name or not _has_tagged_descendant(elem):
+        structure = image_structure(elem, root_key)
+        if structure == IMAGE_IDENTITY:
             return ROLE_IMAGE
+        if structure == IMAGE_UNMATCHED:
+            return ROLE_UNKNOWN
         return ROLE_FILESYSTEM
 
     # Stdlib-ness belongs to the DEPTH-1 element under the ecosystem root and is INHERITED by
@@ -361,6 +365,50 @@ def role_of(elem, root_key, *, has_version, is_stdlib_name, has_package_evidence
     # single element's name is a different structure from nested elements. Here the structures
     # coincide and the version is the only discriminator there is.
     return ROLE_SUBPATH
+
+
+def image_structure(elem, root_key):
+    """Which part of an image an element under Docker/Image is: four cases and a residual.
+
+    ' of tag ' is a BOUNDARY marker, not an identity marker. Everything above it is part of the
+    image's NAME — ghcr.io and astral-sh are segments of one name, not three images — and
+    everything below it is the image's filesystem.
+
+    The identity clause is narrow on purpose. Written as "carries a tag, or has no tagged
+    descendant" it was a rule for a LEAF applied to a TREE: a locally built image that was never
+    tagged made every element of its filesystem an identity, root to leaf, so build/app/package.json
+    was reported as a package the BOM failed to identify. What distinguishes that case is that it
+    is a CHAIN, not that it lacks a tag — the eight genuinely untagged single references are real
+    dependencies with an implicit :latest and must stay identities.
+
+    The residual matters as much as the cases. The clause set this replaces was TOTAL, so its own
+    instruction to report anything matching nothing could never fire: a total rule set has no
+    residual, and an unmeasured shape got a default instead of a question.
+    """
+    root_depth = len(root_key.split('/')) if root_key else 0
+    segments = external_relative_segments(elem)
+    if _tagged_ancestor_below_root(elem, root_depth):
+        return IMAGE_INSIDE
+    if ' of tag ' in elem.name:
+        return IMAGE_IDENTITY
+    if len(segments) == root_depth + 1 and not elem.children:
+        return IMAGE_IDENTITY
+    if _has_tagged_descendant(elem):
+        return IMAGE_NAME_SEGMENT
+
+    head = elem
+    while len(external_relative_segments(head)) > root_depth + 1 and head.parent is not None:
+        head = head.parent
+    size, tagged = 0, False
+    stack = [head]
+    while stack:
+        node = stack.pop()
+        size += 1
+        tagged = tagged or ' of tag ' in node.name
+        stack += node.children
+    if not tagged and size > 1:
+        return IMAGE_UNTAGGED_CHAIN
+    return IMAGE_UNMATCHED
 
 
 def canonical_purl_name(pkgtype, name):

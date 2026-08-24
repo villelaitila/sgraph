@@ -28,7 +28,9 @@ and a purl builder has no pure home to be moved to the way the name repair did.
 from sgraph.converters.external_root_semantics import (
     ROLE_FILESYSTEM, ROLE_FINDING, ROLE_IMAGE, ROLE_PACKAGE, ROLE_STDLIB, ROLE_SUBPATH,
     ROLE_VERSIONED_INSTANCE, ecosystem_of_root, external_relative_segments, external_root_key,
-    ecosystem_of, is_root_node, is_stdlib_name, match_key, repair_npm_package_name, role_of)
+    IMAGE_UNMATCHED, IMAGE_UNTAGGED_CHAIN, IMPORT_NAME_ALIASES, KIND_IMAGE, KIND_REGISTRY,
+    ROOT_KINDS, ecosystem_of, image_structure, is_root_node, is_stdlib_name, match_key,
+    repair_npm_package_name, role_of)
 from sgraph.converters.sbom_cyclonedx_generator import (bom_ref, clean_name, dedup_key,
                                                         extract_version, valid_for_bom)
 
@@ -49,6 +51,7 @@ CATEGORY_DOCKER_IMAGE_IDENTITY = 'docker_image_identity'
 CATEGORY_DECLARED_BOUND = 'declared_bound'
 CATEGORY_FINDING_UNDER_VERSIONED_PACKAGE = 'finding_under_versioned_package'
 CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION = 'package_candidate_without_version'
+CATEGORY_JOINED_TO_VERSIONED_SIBLING = 'joined_to_versioned_sibling'
 
 # The outcome each category reports when its members agree, which they do everywhere except
 # unversioned install paths — those depend on whether the package their TAIL names was emitted.
@@ -63,6 +66,7 @@ DEFAULT_OUTCOME = {
     CATEGORY_DECLARED_BOUND: OUTCOME_VERSION_UNKNOWN_BY_DESIGN,
     CATEGORY_FINDING_UNDER_VERSIONED_PACKAGE: OUTCOME_NOT_A_PACKAGE,
     CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION: OUTCOME_COULD_NOT_IDENTIFY,
+    CATEGORY_JOINED_TO_VERSIONED_SIBLING: OUTCOME_COVERED_ELSEWHERE,
 }
 
 # Categories whose members CLAIM to be packages, and therefore the only ones for which "how
@@ -130,6 +134,116 @@ def package_identity(elem, external_root):
     name = clean_name(elem.name)
     repaired = repair_npm_package_name(name) if ecosystem == 'npm' else None
     return ecosystem, match_key(ecosystem, repaired[0] if repaired else name)
+
+
+def _emits_within(elem):
+    """Whether anything in this element's own subtree emits a component."""
+    stack = list(elem.children)
+    while stack:
+        node = stack.pop()
+        if valid_for_bom(node):
+            return True
+        stack += node.children
+    return False
+
+
+def build_join_index(model):
+    """Every identity this model already publishes, mapped to the ref that publishes it.
+
+    Built from EMITTING elements under REGISTRY roots only, which is guard G5 (the target must
+    already exist) and half of G2 (the join runs import-graph → registry, never the reverse) made
+    structural rather than checked. Keyed by package_identity, so an install path can find the
+    package it installs: keyed on raw names the index would hold strip-ansi while the element
+    asked for wrap-ansi-cjs/strip-ansi, and the recovery could never happen.
+    """
+    root = _external_root(model)
+    index = {}
+    if root is None:
+        return index
+    stack = list(root.children)
+    while stack:
+        elem = stack.pop()
+        stack += elem.children
+        if not valid_for_bom(elem):
+            continue
+        if KIND_REGISTRY not in ROOT_KINDS.get(external_root_key(elem, root), set()):
+            continue
+        index.setdefault(package_identity(elem, root), bom_ref(elem, extract_version(elem) or ''))
+    return index
+
+
+def internal_published_identities(model):
+    """Identities the estate publishes ITSELF, for flagging a join that may be first-party.
+
+    The playwright shape: an internal repository publishing a package whose name a public one also
+    uses. A join onto such a name is recorded and flagged rather than suppressed — suppressing it
+    silently would be the same class of error the flag exists to surface.
+    """
+    identities = set()
+    root = _external_root(model)
+    stack = list(model.rootNode.children)
+    while stack:
+        elem = stack.pop()
+        stack += elem.children
+        if root is not None and (elem is root or elem.isDescendantOf(root)):
+            continue
+        name = elem.attrs.get('package_name', '').strip()
+        ecosystem = elem.attrs.get('ecosystem', '').strip() or None
+        if name and ecosystem:
+            identities.add((ecosystem, match_key(ecosystem, name)))
+    return identities
+
+
+def resolve_identity_by_join(elem, index, external_root, internal_identities=frozenset()):
+    """Resolve an unversioned external against an identity the model already publishes.
+
+    Returns an evidence record or None. Five guards, and the first is the one that matters: a
+    naive name join measured 12 % cross-ecosystem false positives, so both ecosystems must be
+    equal AND non-None — which makes a cross-ecosystem join impossible by construction rather
+    than unlikely, and lets the gate assert zero instead of a rate.
+
+    This is an identity RESOLUTION and never an emission: nothing here appends to a component
+    list, so the join's diff on every generated document is empty by construction.
+    """
+    if valid_for_bom(elem):
+        return None
+    # An element whose own subtree emits is covered BY ITSELF — /External/PIP/click is the package
+    # node of click of version 8.4.2 — and joining it to its own child would corroborate nothing
+    # while inflating the join count with every package in the model. The ledger already counts
+    # these as benign versioned-child parents, so they are never residue either.
+    if _emits_within(elem):
+        return None
+    ecosystem, key = package_identity(elem, external_root)
+    if ecosystem is None or key is None:
+        return None
+
+    covering = index.get((ecosystem, key))
+    rule = 'exact'
+    if covering is None:
+        alias = IMPORT_NAME_ALIASES.get(ecosystem, {}).get(key)
+        if alias is None:
+            return None
+        covering = index.get((ecosystem, match_key(ecosystem, alias)))
+        rule = f'alias:{key}'
+    if covering is None:
+        return None
+
+    return {
+        'element': elem.getPath(),
+        'coveringRef': covering,
+        'ecosystem': ecosystem,
+        'matchRule': rule,
+        'collisionRisk': (ecosystem, key) in internal_identities,
+    }
+
+
+def _image_sub_label(elem, root_key):
+    """The image structure of an element, when it is under an image root and worth naming."""
+    if KIND_IMAGE not in ROOT_KINDS.get(root_key, set()) or is_root_node(elem):
+        # The root itself is structure, not part of any image: /External/Docker/Image is where
+        # images live, and counting it into a chain would inflate every chain by one.
+        return None
+    return image_structure(elem, root_key)
 
 
 def _classify(elem, root_key, emitted_keys):
@@ -208,12 +322,17 @@ def external_coverage_report(model):
     would silently receive the wrong answer.
     """
     root = _external_root(model)
+    unclassified_image_elements = []
+    join_index = build_join_index(model)
+    internal_identities = internal_published_identities(model)
+    joins = []
     categories = {
         name: {
             'elementCount': 0,
             'referencedElementCount': 0,
             'unreferencedElementCount': 0,
             'samples': [],
+            'subLabels': {},
             'outcomes': set(),
             'packages': set()
         }
@@ -261,12 +380,27 @@ def external_coverage_report(model):
             if any(valid_for_bom(child) for child in elem.children):
                 ledger['benignVersionedChildParentElements'] += 1
                 continue
-            category, outcome = _classify(elem, external_root_key(elem), emitted_keys)
+            category, outcome = _classify(elem, external_root_key(elem, root), emitted_keys)
+            # The join is tried only on the residue: an element the taxonomy can already explain
+            # is explained, and re-explaining it as a join would move rows out of categories that
+            # were right about them.
+            if category == CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION:
+                record = resolve_identity_by_join(elem, join_index, root, internal_identities)
+                if record is not None:
+                    joins.append(record)
+                    category = CATEGORY_JOINED_TO_VERSIONED_SIBLING
+                    outcome = OUTCOME_COVERED_ELSEWHERE
             bucket = categories[category]
             bucket['elementCount'] += 1
             bucket['referencedElementCount' if elem.incoming else 'unreferencedElementCount'] += 1
             bucket['outcomes'].add(outcome)
             bucket['samples'].append(elem.getPath())
+            sub_label = _image_sub_label(elem, external_root_key(elem, root))
+            if sub_label == IMAGE_UNTAGGED_CHAIN:
+                bucket['subLabels'].setdefault(sub_label, {'elementCount': 0})
+                bucket['subLabels'][sub_label]['elementCount'] += 1
+            elif sub_label == IMAGE_UNMATCHED:
+                unclassified_image_elements.append(elem.getPath())
             if category in PACKAGE_CLAIMING_CATEGORIES:
                 bucket['packages'].add(package_identity(elem, root))
             ledger['outcomes'][outcome]['elementCount'] += 1
@@ -285,6 +419,12 @@ def external_coverage_report(model):
             ledger,
         'categories':
             categories,
+        'joins':
+            sorted(joins, key=lambda record: record['element']),
+        # A shape that matches no image clause is named rather than defaulted: the rule set it
+        # replaced was total, so it could never say 'I do not know what this is'.
+        'unclassifiedImageElements':
+            sorted(unclassified_image_elements),
         'externalsDeclaredButNothingEmitted': (ledger['elementsWalked'] > 0
                                                and ledger['componentsEmitted'] == 0),
     }
