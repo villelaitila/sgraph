@@ -446,17 +446,38 @@ def canonical_purl_name(pkgtype, name):
     preserved here. npm and nuget are case-sensitive and are left alone.
 
     npm is the opposite: case_sensitive true, because old mixed-case packages were grandfathered
-    in, and its definition states that the scope's leading '@' is always percent encoded. Only a
-    LEADING '@' — an '@' anywhere else belongs to something that is not a scope, and a yarn
-    protocol alias puts one in the version.
+    in, and its definition states that the scope's leading '@' is always percent encoded.
+
+    That last rule applies to EVERY type, not only npm. The npm definition is merely where it is
+    written down; the reason behind it is that '@' is the version separator in a purl, so a raw
+    leading '@' in the name component leaves the string ambiguous to a parser whatever the
+    ecosystem — `pkg:generic/@example/foo@1.0` can be split in more than one place. Keyed on npm,
+    the rule missed exactly the population that needs it most: a scoped npm package whose
+    ecosystem did NOT resolve falls through to 'generic' and so never reached the npm branch, and
+    was published with a raw '@' — 90 such rows in one reported export. The type it ended up with
+    is the one thing that cannot justify emitting a malformed identifier.
+
+    Still only a LEADING '@' — an '@' anywhere else belongs to something that is not a scope, and
+    a yarn protocol alias puts one in the version. Widening WHICH types the rule covers must not
+    widen WHERE in the string it looks.
+
+    No double-encoding guard is needed and none is written: an already-encoded name begins '%40'
+    rather than '@', so it does not match in the first place. A guard would be a branch no input
+    can reach, which is worse than absent — it would read as evidence that some caller passes a
+    pre-encoded name. A test pins the property directly instead.
+
+    Ordered after the pypi folding rather than before it, so a scoped name gets both rules. pypi
+    returned early when this was npm-only, and that early return is what the ordering replaces.
 
     Cross-reference: `match_key` is the OTHER operation and applies a wider rule. Publishing an
     identifier and matching two identifiers are not the same thing, and one function serving both
-    would force a choice between a spec-conformant purl and a working join.
+    would force a choice between a spec-conformant purl and a working join. This change stays on
+    the publishing side: match_key is not consulted here and does not consult this, so a stored
+    name still joins against itself exactly as before.
     """
     if pkgtype == 'pypi':
-        return name.lower().replace('_', '-')
-    if pkgtype == 'npm' and name.startswith('@'):
+        name = name.lower().replace('_', '-')
+    if name.startswith('@'):
         return '%40' + name[1:]
     return name
 

@@ -3560,16 +3560,25 @@ def canonical_component(root, raw_name, version, attrs=None):
 
 
 def test_the_canonicalization_is_a_recorded_migration():
-    """Records two published identifiers that CHANGE, in one place a reviewer can find.
+    """Records the published identifiers that CHANGE, in one place a reviewer can find.
 
     1 224 refs move: 1 053 npm scopes gaining %40 and 171 pypi names folded. Written asserting the
     values shipping today and updated in the commit that lands the change, so a consumer-visible
     migration appears in the diff of a test rather than only in a release note.
+
+    The third line is the scope rule reaching a type other than npm. It moves ZERO refs in the 20
+    local models — every one of the 2 171 scoped purls there is npm and was already encoded — so
+    unlike the two above it is recorded from a fixture rather than from the corpus. That is the
+    honest shape of this one: the population it repairs is a scoped package whose ecosystem did
+    not resolve, which the local models happen not to contain and a reported export contained 90
+    of. A migration measured at zero locally is still a migration for whoever has the rows.
     """
     assert canonical_component('NPM', '@angular/animation',
                                '12.3.1')['purl'] == 'pkg:npm/%40angular/animation@12.3.1'
     assert canonical_component('PIP', 'zope_interface',
                                '5.4.0')['purl'] == 'pkg:pypi/zope-interface@5.4.0'
+    assert canonical_component('UnknownRegistry', '@example/pkg',
+                               '1.0.0')['purl'] == 'pkg:generic/%40example/pkg@1.0.0'
 
 
 def test_an_npm_scope_is_percent_encoded():
@@ -3630,6 +3639,48 @@ def test_a_nuget_name_keeps_its_case():
     component = canonical_component('Assemblies', 'Newtonsoft.Json', '13.0.3')
 
     assert component['purl'] == 'pkg:nuget/Newtonsoft.Json@13.0.3'
+
+
+def test_a_scoped_name_whose_ecosystem_did_not_resolve_is_still_encoded():
+    """The reported residue: a scoped npm package that fell through to the generic type.
+
+    The encoding was keyed on the resolved ecosystem, so an element the type inference could not
+    place never reached it and was published with a raw '@'. That is not a cosmetic difference.
+    '@' is the version separator in a purl, so 'pkg:generic/@example/accounting-codes@100.4.0'
+    is ambiguous to a parser in a way the encoded spelling is not — the name component has to be
+    unambiguous whatever the ecosystem turned out to be.
+
+    The root here is one purl_for cannot type, which is what puts the element on the fallback
+    branch: the defect is reachable only through a type resolution FAILURE, so a fixture naming a
+    known root would test the path that already worked.
+    """
+    component = canonical_component('UnknownRegistry', '@example/accounting-codes', '100.4.0')
+
+    assert component['purl'] == 'pkg:generic/%40example/accounting-codes@100.4.0'
+    assert purl_type_resolution(component) == 'ecosystem unresolved'
+
+
+def test_the_generic_encoding_does_not_touch_the_disclosed_name():
+    """Widening the encoding must not widen what it applies TO.
+
+    A4's split is that the purl is canonicalised and the component's name keeps the model's
+    spelling. Extending the scope rule beyond npm changes which purls are rewritten; it must not
+    start rewriting names, or the document would stop disclosing the id the model actually held.
+    """
+    component = canonical_component('UnknownRegistry', '@example/accounting-codes', '100.4.0')
+
+    assert component['name'] == '@example/accounting-codes'
+
+
+def test_a_generic_name_without_a_scope_is_untouched():
+    """The control: widening the rule must not start encoding names that carry no scope.
+
+    Without this, a rule that encoded the whole name, or that matched an '@' anywhere, would pass
+    every other assertion in this group — they all use scoped inputs.
+    """
+    component = canonical_component('UnknownRegistry', 'accounting-codes', '100.4.0')
+
+    assert component['purl'] == 'pkg:generic/accounting-codes@100.4.0'
 
 
 def test_the_disclosed_name_stays_raw_and_carries_no_provenance():
