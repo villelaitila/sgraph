@@ -242,7 +242,7 @@ converter.convert('model.xml', 'graph.graphml')
 
 ## CycloneDX SBOM Format
 
-`sgraph.converters.sbom_cyclonedx_generator` emits CycloneDX 1.7 documents. It can produce a
+`sgraph.converters.sbom_cyclonedx_generator` emits CycloneDX documents. It can produce a
 single SBOM for the whole model, one SBOM per element at a chosen tree depth (`--level`), or one
 for a named element (`--element-path`).
 
@@ -250,6 +250,38 @@ for a named element (`--element-path`).
 # One SBOM per repository, for a model whose repositories sit at depth 3
 python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json --level 3
 ```
+
+### The declared specification version
+
+Documents declare **CycloneDX 1.6** by default. `--spec-version` selects another of `1.4`, `1.5`,
+`1.6` and `1.7`; anything else is refused rather than passed through to `specVersion`.
+
+The document content is identical across that whole range — only the declared version differs.
+Every document the generator can produce validates against the official bom-1.4, bom-1.5 and
+bom-1.6 schemas with nothing but the version string swapped, and those schemas set
+`additionalProperties: false` at both the document root and the component, so nothing in the
+output requires the newest specification.
+
+What the version does decide is whether a consumer will read the document at all. CycloneDX 1.7
+was published in October 2025, and a tool built against an earlier library rejects a 1.7 document
+on the version string alone, before reading any of its content. Hence the default: 1.6 carries
+the same information to a far larger installed base. Ask for 1.7 when the consuming tool is known
+to support it.
+
+```bash
+# For a consumer that supports the newest specification
+python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json \
+    --level 3 --spec-version 1.7
+```
+
+`--spec-version` works in **every** mode, including the single-SBOM mode that rejects the closure
+flags below. The asymmetry is deliberate: the closure flags would be silently ignored there,
+whereas refusing a version selection would strand the one export shape that has no `--level`
+behind a version its consumer cannot read.
+
+The same selection is available on `generate_from_sgraph`, `generate_multi_from_sgraph` and
+`generate_for_element_from_sgraph` as a `spec_version` keyword. 1.3 is deliberately not offered:
+it is permissive where the later schemas are strict, so conformance to it could not be checked.
 
 ### The transitive dependency closure
 
@@ -422,9 +454,10 @@ nothing else" from "we could not identify the rest".
 python -m sgraph.converters.sbom_cyclonedx_generator model.xml sbom.json --coverage
 ```
 
-It adds two things. Four `metadata.properties` counting what was and was not identified under
-`External` — components emitted, not a package, version unknown by design, could not identify —
-and one `compositions` entry stating whether the third-party assembly is complete:
+It adds two things. Five `metadata.properties` counting what was and was not identified under
+`External` — components emitted, not a package, version unknown by design, could not identify,
+unknown root kind — and one `compositions` entry stating whether the third-party assembly is
+complete:
 
 ```json
 "compositions": [{ "aggregate": "incomplete", "assemblies": ["/Org"] }]
@@ -432,9 +465,37 @@ and one `compositions` entry stating whether the third-party assembly is complet
 
 | `aggregate` | When |
 |-------------|------|
-| `incomplete` | Externals were seen that could not be identified. |
-| `unknown` | Everything seen was identified. Whether everything was *seen* is a different question. |
+| `incomplete` | Externals were seen that could not be identified, or that sit under a root with no rule. |
+| `unknown` | Everything seen was explained. Whether everything was *seen* is a different question. |
 | `not_specified` | No `External` subtree at all, so there is no basis for a claim. |
+
+#### `coverageUnknownRootKind`, and why it is not part of `coverageCouldNotIdentify`
+
+`couldNotIdentify` means an identification was attempted and failed. It is only a meaningful
+number if everything counted into it actually claimed to be a third-party package.
+
+An element under a root this library has no rule for makes no such claim. The `External` subtree
+is organised into roots — `NPM`, `PIP`, `Maven`, and so on — and the converter carries a table of
+what each root *is*: a package registry, an import graph, a standard library, a filesystem
+namespace. A model can carry roots absent from that table, and they are common: `TypeScript`,
+`JavaScript`, `Node`, `DotNet`, `Rust`, the `Odoo*` roots, Java and Android package namespaces.
+Under such a root nothing is known about what its members are, so neither "we failed to identify
+a package" nor "this is not a package" is supported.
+
+Those elements are counted separately, under a name that says what is true. The difference is
+large: across a 20-model corpus this split moved 78,877 of 80,971 elements out of
+`couldNotIdentify`, leaving 1,991 that are genuine identification failures.
+
+Nothing is hidden — a consumer wanting the old total adds the two. What changes is that the two
+numbers call for different responses: `couldNotIdentify` is identification work, while
+`unknownRootKind` is answered by classifying a handful of roots.
+
+**What this is not.** A root's absence from the table does not make its contents non-packages.
+An unmapped `JavaScript` or `TypeScript` root holds real npm packages beside code symbols, and
+depth does not separate them either — `java/util` at package depth is the standard library while
+`TypeScript/vue-router` at the same depth is a real package. No shape rule is guessed at; the gap
+is reported instead. A root that is *in* the table and asserts no ecosystem (`Docker`, `JVM`,
+`Java`) is a different case and is not counted here.
 
 - **`complete` is never emitted.** CycloneDX defines it as "no further relationships ... are
   KNOWN to exist". The report proves only that every element the walk *saw* was classified, never
@@ -446,9 +507,11 @@ and one `compositions` entry stating whether the third-party assembly is complet
   other subtree's is. `--coverage` combined with either is refused rather than emitted with a
   caveat.
 - **Opt-in.** Without the flag the document is exactly what earlier releases produced.
-- The four counts are properties rather than part of the composition because a composition holds
+- The five counts are properties rather than part of the composition because a composition holds
   `aggregate`, `assemblies`, `dependencies` and `vulnerabilities` and nothing else. Completeness
   fits the standard; a ten-category taxonomy with counts and samples does not.
+- Combines with `--spec-version`; the counts and the composition are valid at every supported
+  version, since the three `aggregate` values used are defined from 1.4 onward.
 
 
 ### Where an element lives
@@ -467,7 +530,8 @@ and every internal component — publishes its position in the model:
     { "url": "https://example.org/org/repoA.git", "type": "vcs" }
   ],
   "properties": [
-    { "name": "softagram:elementPath", "value": "/OrgName/GroupA/repoA" }
+    { "name": "softagram:elementPath", "value": "/OrgName/GroupA/repoA" },
+    { "name": "softagram:elementType", "value": "repository" }
   ] }
 ```
 
@@ -475,7 +539,27 @@ and every internal component — publishes its position in the model:
 |-------|---------|
 | `group` | The **full path of the parent element**, not just its name. Omitted for a top-level element, which has no parent path. |
 | `properties[softagram:elementPath]` | The element's own full path. A property rather than a field because the CycloneDX component schema sets `additionalProperties: false`. |
+| `properties[softagram:elementType]` | What the **model** calls this element — `repository`, `dir`, `file`, and so on. **Present only when the model carries a type**; see below. |
 | `externalReferences[type=vcs]` | The `repo_url` of the element, or of the **nearest ancestor** carrying a non-blank one. Absent when no ancestor has one — never a placeholder. |
+
+#### `softagram:elementType`
+
+A `--level` export splits at a tree depth, and what sits at that depth is usually a repository but
+not always. A document describing a directory, or a file, that emits no components is
+indistinguishable from a repository that genuinely has no dependencies — and those mean opposite
+things: "nothing to report" versus "not the kind of thing that reports". `component.type` cannot
+carry the distinction, because CycloneDX closes that enum and has no `repository` value.
+
+**The property is absent when the model carries no type, and absence means "not stated" — never
+"not a repository".** Repository elements are not required to carry a `type` attribute, so a
+missing one is evidence of nothing. Emitting `unknown` or `""` there would turn silence into a
+positive claim, and a consumer filtering on `elementType != "repository"` would then exclude
+genuine repositories on the strength of an invented value. Filter on the property's *presence*
+before filtering on its value.
+
+Expect more values than `repository` and `dir`. A level split on a small single-repository model
+reaches file and function elements, so `file`, `function`, `variable`, `class` and `page` all
+occur. The property states what the model says in every case.
 
 Components describing **3rd-party packages** carry none of these. Their identity is the `purl`.
 
@@ -487,8 +571,16 @@ Components describing **3rd-party packages** carry none of these. Their identity
   rejects the whole document rather than the one field. Counts such as `indirectExposureCount`
   are therefore published as `"3"`, not `3`, and a consumer reading them numerically has to
   parse them — the same as for `dependencyDepth`.
-- `deterministic_serial(elementPath) == serialNumber`. The published path is the exact string the
-  serial is derived from, so a consumer can verify a document's identity without the model.
+- `deterministic_serial(elementPath) == serialNumber` **in `--level` and `--element-path` mode**.
+  The published path is the exact string the serial is derived from, so a consumer can verify a
+  document's identity without the model.
+
+  **This does not hold in single-SBOM mode**, where `serialNumber` is a random UUID v4 minted per
+  call: two runs over an unchanged model produce different serials, and neither is derived from
+  the element path the document publishes. A consumer must not apply the check above to a
+  single-SBOM document. This is long-standing behaviour rather than a recent change, and altering
+  it would change the identity every existing single-SBOM consumer files the document under, so it
+  is documented here rather than quietly repaired.
 - `group + '/' + name == elementPath` below the top level.
 - Two repositories that share a name under different groups are distinguished by `group` and
   `elementPath`. They are *not* reliably distinguished by `bom-ref`, whose collision suffix
@@ -500,9 +592,26 @@ Components describing **3rd-party packages** carry none of these. Their identity
   renamed or restructured. Read it from the path rather than hardcoding it.
 - **`group` holds a path, not a package namespace.** The CycloneDX specification suggests
   avoiding special characters in `group` and shows package coordinates such as
-  `org.apache.commons`. A model group is a tree location, and the slash-delimited path is what
-  makes two identically named groups distinguishable, so this converter prefers precision over
-  that convention. Tools that render `group` as a package coordinate will show the path.
+  `org.apache.commons`. A model group is a tree location, so this converter puts the parent's
+  full path there. Tools that render `group` as a package coordinate will show the path.
+
+  **What the path buys, stated accurately.** It distinguishes two *groups* that share a name under
+  different parents — `/Estate/TeamA/tools` and `/Estate/TeamB/tools` — *in a model that has such
+  a pair*. Many models have none. Measured across three real single-root estates at both level 2
+  and level 3, every full-path `group` value mapped one-to-one onto its bare name (73 → 73, 78 →
+  78, 11 → 11), so the prefix disambiguated nothing in any of them.
+
+  So the path is a guarantee that holds for *every* model, not a fix for a collision every model
+  has, and a reader should not infer that their own `group` values would collide without it. Note
+  the collision it guards against is between **groups**; two repositories sharing a name under
+  *differently* named groups are already distinguished by the group name alone.
+
+  **If you want the bare name, take it from the path**; the last segment is the parent's name.
+  And if you want an unambiguous identifier for the element itself, use
+  `properties[softagram:elementPath]`, which is unique across all documents from one model and is
+  the string the serial number is derived from — `group` is not the field to reach for. Note the
+  first path segment is the estate root and changes when the estate is renamed, so anything
+  derived from `group` inherits that instability.
 - **`purl` and `version` are empty on the metadata component**, and on an internal component
   whose element publishes no unambiguous package. A repository has no package identity and no
   version of its own; a path is not a valid purl and is deliberately not placed there. An

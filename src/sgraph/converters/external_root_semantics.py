@@ -249,11 +249,24 @@ def is_root_node(elem):
     """Whether this element IS a registry root rather than something under one.
 
     A root node is structure, not an external: `/External/NPM` is where npm packages live, not a
-    package called NPM. Decided by asking whether the element's own External-relative path is a
-    key of the registry, so the registry stays the single place that knows what a root is and a
-    two-level root like Docker/Image is recognised as readily as NPM.
+    package called NPM. A two-level root like Docker/Image is recognised as readily as NPM,
+    because the registry is consulted for exactly that case.
+
+    But the registry is not the ONLY answer, and asking it alone was a defect. A root the tables
+    have no row for — DotNet, TypeScript, Node, Unknown_Binary_Files, and eleven others across the
+    local corpus — was then not a root at all, and the root element itself was classified as an
+    element inside some root: a package candidate that failed identification, named after the
+    bucket it is. `external_root_key` never agreed with that reading, since it falls back to the
+    first segment and so treats those names as root keys; two functions in one module answering
+    "what is a root" differently is the actual bug.
+
+    Depth settles it without a table. An element ONE segment below External is a bucket, whatever
+    is or is not known about what it holds — being unable to say what kind of root something is
+    has no bearing on whether it is one. Checked across the corpus: every depth-1 element under
+    External is a bucket and none is a package.
     """
-    return '/'.join(external_relative_segments(elem)) in ROOT_ECOSYSTEM
+    segments = external_relative_segments(elem)
+    return len(segments) == 1 or '/'.join(segments) in ROOT_ECOSYSTEM
 
 
 def is_stdlib_name(root_key, name):
@@ -446,17 +459,38 @@ def canonical_purl_name(pkgtype, name):
     preserved here. npm and nuget are case-sensitive and are left alone.
 
     npm is the opposite: case_sensitive true, because old mixed-case packages were grandfathered
-    in, and its definition states that the scope's leading '@' is always percent encoded. Only a
-    LEADING '@' — an '@' anywhere else belongs to something that is not a scope, and a yarn
-    protocol alias puts one in the version.
+    in, and its definition states that the scope's leading '@' is always percent encoded.
+
+    That last rule applies to EVERY type, not only npm. The npm definition is merely where it is
+    written down; the reason behind it is that '@' is the version separator in a purl, so a raw
+    leading '@' in the name component leaves the string ambiguous to a parser whatever the
+    ecosystem — `pkg:generic/@example/foo@1.0` can be split in more than one place. Keyed on npm,
+    the rule missed exactly the population that needs it most: a scoped npm package whose
+    ecosystem did NOT resolve falls through to 'generic' and so never reached the npm branch, and
+    was published with a raw '@' — 90 such rows in one reported export. The type it ended up with
+    is the one thing that cannot justify emitting a malformed identifier.
+
+    Still only a LEADING '@' — an '@' anywhere else belongs to something that is not a scope, and
+    a yarn protocol alias puts one in the version. Widening WHICH types the rule covers must not
+    widen WHERE in the string it looks.
+
+    No double-encoding guard is needed and none is written: an already-encoded name begins '%40'
+    rather than '@', so it does not match in the first place. A guard would be a branch no input
+    can reach, which is worse than absent — it would read as evidence that some caller passes a
+    pre-encoded name. A test pins the property directly instead.
+
+    Ordered after the pypi folding rather than before it, so a scoped name gets both rules. pypi
+    returned early when this was npm-only, and that early return is what the ordering replaces.
 
     Cross-reference: `match_key` is the OTHER operation and applies a wider rule. Publishing an
     identifier and matching two identifiers are not the same thing, and one function serving both
-    would force a choice between a spec-conformant purl and a working join.
+    would force a choice between a spec-conformant purl and a working join. This change stays on
+    the publishing side: match_key is not consulted here and does not consult this, so a stored
+    name still joins against itself exactly as before.
     """
     if pkgtype == 'pypi':
-        return name.lower().replace('_', '-')
-    if pkgtype == 'npm' and name.startswith('@'):
+        name = name.lower().replace('_', '-')
+    if name.startswith('@'):
         return '%40' + name[1:]
     return name
 

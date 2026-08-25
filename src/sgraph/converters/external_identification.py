@@ -13,7 +13,7 @@ and reports the categories with counts and sample paths.
 the moment anyone was measured on it, and the cheapest way to raise it is to widen the
 not-a-package filter. So: the buckets CONSERVE (they sum to an independently counted walk);
 membership in the largest ones is PROVABLE (exhibit the covering component); there is no scalar,
-only four outcome classes of distinct meaning; and there is NO numeric constant in this module
+only five outcome classes of distinct meaning; and there is NO numeric constant in this module
 except SAMPLE_CAP, which a test asserts by parsing the source. The corpus these categories were
 measured on was produced without the lockfile analyzers running, so a threshold tuned to it would
 encode a measurement gap as a rule.
@@ -27,7 +27,8 @@ and a purl builder has no pure home to be moved to the way the name repair did.
 """
 from sgraph.converters.external_root_semantics import (
     ROLE_FILESYSTEM, ROLE_FINDING, ROLE_IMAGE, ROLE_PACKAGE, ROLE_STDLIB, ROLE_SUBPATH,
-    ROLE_VERSIONED_INSTANCE, ecosystem_of_root, external_relative_segments, external_root_key,
+    ROLE_UNKNOWN, ROLE_VERSIONED_INSTANCE, ecosystem_of_root, external_relative_segments,
+    external_root_key,
     IMAGE_UNMATCHED, IMAGE_UNTAGGED_CHAIN, IMPORT_NAME_ALIASES, KIND_IMAGE, KIND_REGISTRY,
     ROOT_KINDS, ecosystem_of, image_structure, is_root_node, is_stdlib_name, match_key,
     repair_npm_package_name, role_of)
@@ -41,6 +42,19 @@ OUTCOME_NOT_A_PACKAGE = 'notAPackage'
 OUTCOME_VERSION_UNKNOWN_BY_DESIGN = 'versionUnknownByDesign'
 OUTCOME_COULD_NOT_IDENTIFY = 'couldNotIdentify'
 
+# The fifth outcome, and the only one that reports the LIBRARY's own limit rather than the
+# model's. The other four all say something about the element; this one says that no rule exists
+# to say anything about it, which is a different kind of fact and is why it is not folded into
+# any of them.
+#
+# couldNotIdentify would be a claim that an identification was attempted and failed. notAPackage
+# would be a claim that the element is not one. Under a root with no rule, neither is supported —
+# such a root can hold real packages at package depth and code symbols one level deeper, and
+# nothing available here separates them. Publishing either would be an invented answer, and the
+# invented answer in the couldNotIdentify direction is what made the headline unusable: 80 659
+# elements across the 20 local models, 68 689 of them under a single root.
+OUTCOME_UNKNOWN_ROOT_KIND = 'unknownRootKind'
+
 CATEGORY_SUBPATH_OF_EMITTED_PACKAGE = 'subpath_of_emitted_package'
 CATEGORY_SUBPATH_OF_UNIDENTIFIED_PACKAGE = 'subpath_of_unidentified_package'
 CATEGORY_UNVERSIONED_INSTALL_PATH = 'unversioned_install_path'
@@ -52,6 +66,7 @@ CATEGORY_DECLARED_BOUND = 'declared_bound'
 CATEGORY_FINDING_UNDER_VERSIONED_PACKAGE = 'finding_under_versioned_package'
 CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION = 'package_candidate_without_version'
 CATEGORY_JOINED_TO_VERSIONED_SIBLING = 'joined_to_versioned_sibling'
+CATEGORY_UNKNOWN_ROOT_KIND = 'unknown_root_kind'
 
 # The outcome each category reports when its members agree, which they do everywhere except
 # unversioned install paths — those depend on whether the package their TAIL names was emitted.
@@ -67,12 +82,16 @@ DEFAULT_OUTCOME = {
     CATEGORY_FINDING_UNDER_VERSIONED_PACKAGE: OUTCOME_NOT_A_PACKAGE,
     CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION: OUTCOME_COULD_NOT_IDENTIFY,
     CATEGORY_JOINED_TO_VERSIONED_SIBLING: OUTCOME_COVERED_ELSEWHERE,
+    CATEGORY_UNKNOWN_ROOT_KIND: OUTCOME_UNKNOWN_ROOT_KIND,
 }
 
 # Categories whose members CLAIM to be packages, and therefore the only ones for which "how
 # many distinct packages" is a defined question. For a code symbol, a filesystem path or a stdlib
 # module the field is absent rather than zero, because zero would read as "we looked and found
 # none". A count is published where it means something, or not at all.
+#
+# CATEGORY_UNKNOWN_ROOT_KIND is deliberately absent: its members make no claim either way, so
+# counting distinct packages among them would answer a question none of them asked.
 PACKAGE_CLAIMING_CATEGORIES = frozenset({
     CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION,
     CATEGORY_DECLARED_BOUND,
@@ -80,12 +99,24 @@ PACKAGE_CLAIMING_CATEGORIES = frozenset({
     CATEGORY_DOCKER_IMAGE_IDENTITY,
 })
 
+# Five now rather than four. The count that moved out of couldNotIdentify is published here
+# rather than dropped, because the goal is a headline that means what it says, not a smaller one:
+# a consumer that wants the old total can still add the two, and a consumer that wants to act on
+# it can now see that what it needs is rules for a handful of roots rather than identification
+# work on tens of thousands of elements.
 SUMMARY_PROPERTIES = ('coverageComponentsEmitted', 'coverageNotAPackage',
-                      'coverageVersionUnknownByDesign', 'coverageCouldNotIdentify')
+                      'coverageVersionUnknownByDesign', 'coverageCouldNotIdentify',
+                      'coverageUnknownRootKind')
 
-# Composition aggregate values, from bom-1.7.schema.json — the specVersion this generator
-# declares. Three of the ten are reachable from a coverage ledger; the reasoning for which three,
-# and for the one that is deliberately unreachable, is in coverage_compositions.
+# Composition aggregate values, from bom-1.6.schema.json — the default specVersion, whose
+# aggregateType enum holds the same ten values as 1.7's. Three of the ten are reachable from a
+# coverage ledger; the reasoning for which three, and for the one that is deliberately
+# unreachable, is in coverage_compositions.
+#
+# All three named below are also in the 1.4 enum, which defines six values rather than ten
+# (it lacks the first-party/third-party proprietary and opensource refinements added in 1.5).
+# So a coverage document stays valid at every version the generator can declare, and the
+# selectable specVersion does not reach this decision.
 AGGREGATE_INCOMPLETE = 'incomplete'
 AGGREGATE_UNKNOWN = 'unknown'
 AGGREGATE_NOT_SPECIFIED = 'not_specified'
@@ -315,6 +346,25 @@ def _classify(elem, root_key, emitted_keys):
         return CATEGORY_SUBPATH_OF_UNIDENTIFIED_PACKAGE, DEFAULT_OUTCOME[
             CATEGORY_SUBPATH_OF_UNIDENTIFIED_PACKAGE]
 
+    # Last before the residue, because it removes elements the residue was never entitled to. Any
+    # rule that CAN say something has already had its turn above; what is left under a root with
+    # no entry in ROOT_KINDS is unreasoned-about rather than unidentified.
+    #
+    # Gated on the ROOT rather than on the role alone, and the gate is the distinction ROOT_KINDS
+    # draws about itself: "A root absent from this table is unknown, which is a different fact
+    # from a root that is known to assert no ecosystem." Docker, JVM and Java are IN the table
+    # mapped to an empty set — the tables have looked at them and have an answer — so they keep
+    # today's category. Only genuine absence reaches this line.
+    #
+    # This is emphatically NOT the inference that a root's absence from a table makes its contents
+    # non-packages. Some of them are packages: an unmapped JavaScript or TypeScript root holds
+    # real npm packages at package depth beside code symbols one level deeper, and this category
+    # covers both because nothing available here separates them. It reports the missing rule, and
+    # the repair is to add the rule — measure the root, then give it a ROOT_KINDS row — not to
+    # guess from shape, which is how a wrong answer gets locked in.
+    if role == ROLE_UNKNOWN and root_key not in ROOT_KINDS:
+        return CATEGORY_UNKNOWN_ROOT_KIND, DEFAULT_OUTCOME[CATEGORY_UNKNOWN_ROOT_KIND]
+
     return CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION, DEFAULT_OUTCOME[
         CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION]
 
@@ -361,6 +411,9 @@ def external_coverage_report(model):
                 'elementCount': 0
             },
             OUTCOME_COULD_NOT_IDENTIFY: {
+                'elementCount': 0
+            },
+            OUTCOME_UNKNOWN_ROOT_KIND: {
                 'elementCount': 0
             }
         }
@@ -476,7 +529,7 @@ def render_coverage_report(report):
 def coverage_compositions(report, subject_ref=None):
     """The completeness claim, in the slot CycloneDX defines for it.
 
-    The four counts stay in metadata properties, because a composition holds `aggregate`,
+    The five counts stay in metadata properties, because a composition holds `aggregate`,
     `assemblies`, `dependencies` and `vulnerabilities` and nothing else — a ten-category taxonomy
     with counts and samples has no home here, and the schema sets additionalProperties:false so
     inventing one is invalid rather than merely unconventional. What DOES belong here is the one
@@ -500,9 +553,18 @@ def coverage_compositions(report, subject_ref=None):
     absent key reads as "the subject was not named", which is what is true.
     """
     ledger = report['ledger']
+    # Both unidentified and unreasoned-about elements make the assembly incomplete, and the second
+    # is here deliberately. Splitting the count out of couldNotIdentify must not soften the
+    # completeness claim as a side effect: an element under a root with no rule may perfectly well
+    # be a package that never reached the document, so relationships beyond those listed do exist.
+    # Reading only couldNotIdentify would have flipped such a document to the weaker 'unknown' the
+    # moment the split shipped — a consumer told the assembly is merely inconclusive rather than
+    # incomplete, on the strength of a bookkeeping change. A test pins that flip.
+    unexplained = (ledger['outcomes'][OUTCOME_COULD_NOT_IDENTIFY]['elementCount'] +
+                   ledger['outcomes'][OUTCOME_UNKNOWN_ROOT_KIND]['elementCount'])
     if not ledger['elementsWalked']:
         aggregate = AGGREGATE_NOT_SPECIFIED
-    elif ledger['outcomes'][OUTCOME_COULD_NOT_IDENTIFY]['elementCount']:
+    elif unexplained:
         aggregate = AGGREGATE_INCOMPLETE
     else:
         aggregate = AGGREGATE_UNKNOWN
@@ -529,7 +591,7 @@ def attach_coverage_compositions(document, report):
 
 
 def attach_coverage_summary(document, report):
-    """Attach four fixed-cardinality counts to a document's metadata.
+    """Attach five fixed-cardinality counts to a document's metadata.
 
     Opt-in by being called: no generator path calls this, which is what keeps every document
     byte-identical by default. That safety lives in the call graph, where a test can check it,
@@ -537,15 +599,20 @@ def attach_coverage_summary(document, report):
     attach_ that did not attach would be a silent no-op, which is the defect class this sprint
     exists to remove.
 
-    Four numbers of distinct meaning rather than a score: CycloneDX has nowhere natural for a
+    Five numbers of distinct meaning rather than a score: CycloneDX has nowhere natural for a
     taxonomy, consumers ignore properties they do not know, and fixed cardinality can never bloat
     a document. Values are strings because CycloneDX types a property value as a string.
+
+    The fifth is coverageUnknownRootKind, and it is a split rather than an addition: those
+    elements were previously counted into coverageCouldNotIdentify, where they asserted a failed
+    identification that was never attempted. A consumer wanting the old total adds the two.
     """
     ledger = report['ledger']
     outcomes = ledger['outcomes']
     values = (ledger['componentsEmitted'], outcomes[OUTCOME_NOT_A_PACKAGE]['elementCount'],
               outcomes[OUTCOME_VERSION_UNKNOWN_BY_DESIGN]['elementCount'],
-              outcomes[OUTCOME_COULD_NOT_IDENTIFY]['elementCount'])
+              outcomes[OUTCOME_COULD_NOT_IDENTIFY]['elementCount'],
+              outcomes[OUTCOME_UNKNOWN_ROOT_KIND]['elementCount'])
     properties = document.setdefault('metadata', {}).setdefault('properties', [])
     for name, value in zip(SUMMARY_PROPERTIES, values):
         properties.append({'name': name, 'value': str(value)})

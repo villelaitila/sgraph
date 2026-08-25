@@ -181,3 +181,80 @@ def test_the_registry_agrees_with_purl_for_on_every_known_root(root_key):
                    for prop in properties)
     assert purl_type == FALLBACK_PURL_TYPE or inferred
     assert purl_type not in {segment.lower() for segment in root_key.split('/')}
+
+
+# --- A leading scope marker is encoded for every purl type ---
+#
+# The encoding was written as an npm rule, because the npm definition is where it is stated: "the
+# npm scope @ sign prefix is always percent encoded". But the reason it is stated there is not
+# npm-specific. '@' is the VERSION SEPARATOR in a purl, so a raw leading '@' in the name component
+# makes the string ambiguous to any parser — 'pkg:generic/@example/foo@1.0' can be read as name
+# '@example/foo' at version '1.0', or otherwise, depending on where the parser splits. That is a
+# well-formedness problem, not an ecosystem courtesy.
+#
+# The rows that hit it are scoped npm packages whose ecosystem did NOT resolve: they fall through
+# to the 'generic' type and so never reached the npm-only branch, and were published with a raw
+# '@'. Encoding at the shared point rather than adding a second per-ecosystem branch is what makes
+# a purl type added later inherit the rule instead of repeating the defect.
+
+
+SCOPE_BEARING_PURL_TYPES = ('npm', 'generic', 'nuget', 'golang', 'deb', 'docker', 'pypi')
+
+
+@pytest.mark.parametrize('pkgtype', SCOPE_BEARING_PURL_TYPES)
+def test_a_leading_scope_is_encoded_for_every_purl_type(pkgtype):
+    """Not an npm courtesy but a purl well-formedness rule, so it cannot be keyed on ecosystem.
+
+    pypi is in the list even though a scoped pypi name is not a thing anyone publishes: the rule
+    is about the character's meaning in the purl string, and a type where the shape cannot occur
+    loses nothing by being covered. What matters is that no type is left able to emit a raw one.
+    """
+    assert semantics().canonical_purl_name(pkgtype, '@example/foo') == '%40example/foo'
+
+
+@pytest.mark.parametrize('pkgtype', SCOPE_BEARING_PURL_TYPES)
+def test_an_already_encoded_scope_is_not_encoded_twice(pkgtype):
+    """'%2540example' would name a package that exists in no registry.
+
+    Double encoding is the characteristic failure of moving an encoding step to a shared point:
+    the value arrives having already passed through the old one. Asserted for every type rather
+    than for the one that used to do the encoding, because after the move any type can be the one
+    that receives a pre-encoded name.
+    """
+    assert semantics().canonical_purl_name(pkgtype, '%40example/foo') == '%40example/foo'
+
+
+@pytest.mark.parametrize('pkgtype', SCOPE_BEARING_PURL_TYPES)
+def test_only_a_leading_at_is_a_scope_marker_for_every_type(pkgtype):
+    """The narrow rule survives the widening: an '@' elsewhere is not a scope.
+
+    A yarn protocol alias puts an '@' in the version, and an '@' inside a name belongs to
+    something that is not a scope. Widening the rule from one ecosystem to all of them is a change
+    of WHICH strings it applies to, and must not become a change of WHERE in the string it looks.
+    """
+    assert semantics().canonical_purl_name(pkgtype, 'foo@bar') == 'foo@bar'
+    assert semantics().canonical_purl_name(pkgtype, 'string-width-cjs') == 'string-width-cjs'
+
+
+def test_the_pypi_folding_still_runs_before_the_scope_encoding():
+    """The two rules compose rather than one shadowing the other.
+
+    pypi returned early, so moving the scope rule below it has to keep the folding reachable. A
+    scoped pypi name exercises both in one call, which is the only shape that can tell 'both ran'
+    from 'the first one returned'.
+    """
+    assert semantics().canonical_purl_name('pypi', 'Zope_Interface') == 'zope-interface'
+    assert semantics().canonical_purl_name('pypi', '@Zope_Scope/Pkg') == '%40zope-scope/pkg'
+
+
+def test_the_scope_encoding_does_not_reach_the_match_key():
+    """Publishing an identifier and joining two identifiers stay different operations.
+
+    match_key feeds the distinct-package count and the join index, both of which key on names
+    read from the MODEL rather than on emitted purls. Encoding a published name must therefore
+    leave the key untouched — if it did not, every stored scoped package would stop matching
+    itself the moment this shipped.
+    """
+    assert semantics().match_key('npm', '@example/foo') == '@example/foo'
+    assert semantics().match_key('npm', '@example/foo') != semantics().canonical_purl_name(
+        'npm', '@example/foo')

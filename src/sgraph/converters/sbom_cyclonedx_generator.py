@@ -14,6 +14,28 @@ from sgraph.converters.external_root_semantics import (canonical_purl_name,
 # Fixed namespace for deterministic UUID v5 generation of SBOM serial numbers.
 SGRAPH_SBOM_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://softagram.com/sgraph/sbom")
 
+# The CycloneDX versions a caller may ask for, oldest first.
+#
+# Every document this module produces validates against the official bom-1.4, bom-1.5 and bom-1.6
+# schemas with nothing but the version string changed — measured over 912 documents generated from
+# 20 real models in single, per-level and coverage modes, with zero errors at all three. Those
+# schemas set additionalProperties:false at both the document root and the component definition,
+# so that is a statement about what the output contains rather than a schema declining to look.
+#
+# 1.3 is deliberately absent. It is permissive where the later three are strict, so a document
+# passing against it would prove nothing, and offering a version whose conformance cannot be
+# checked is worse than not offering it.
+SUPPORTED_SPEC_VERSIONS = ('1.4', '1.5', '1.6', '1.7')
+
+# 1.6 rather than the newest, because a default no consumer can ingest is not a useful default.
+# CycloneDX 1.7 was published in October 2025, and a consumer built against an earlier library
+# rejects a 1.7 document on the version string alone, before reading any of its content — a
+# measured instance runs cyclonedx-core-java 9.0.5, which is exactly that case, and the export is
+# unusable there in full. Since the content is identical across the supported range, declaring
+# 1.6 loses a consumer no information whatsoever and gains it the ability to read the document at
+# all. A caller that wants the newest asks for it by name.
+DEFAULT_SPEC_VERSION = '1.6'
+
 
 def deterministic_serial(element_path: str) -> str:
     """Generate a deterministic urn:uuid: serial number from an element path.
@@ -153,9 +175,11 @@ PURL_TYPE_SOURCE_PROPERTY = 'purlTypeResolution'
 # carried before this mapping — is wrong for an image. Consumers route components by type, so an
 # image classified as a library is scanned as application code rather than as a base layer: the
 # misclassification changes what a consumer does with the row, not merely how it reads.
-# 'container' is a value of the component type enum in the CycloneDX 1.7 schema
-# (bom-1.7.schema.json), described there as a packaging and/or runtime format that isolates
-# software through virtualization technology.
+# 'container' is a value of the component type enum in the CycloneDX 1.6 schema
+# (bom-1.6.schema.json), the default specVersion, described there as a packaging and/or runtime
+# format that isolates software through virtualization technology. It is in that enum in every
+# version this generator can declare — it has been present since 1.4, which is the oldest — so
+# the classification holds whichever one a caller selects.
 #
 # Keyed on the purl type rather than on the branch of purl_for that produced it, so a future
 # producer of the same purl type is classified correctly without a second edit here.
@@ -890,9 +914,21 @@ def analyze_3rdparty(external_root, sbom):
 
 ELEMENT_PATH_PROPERTY = 'softagram:elementPath'
 
+# What the MODEL calls this element - 'repository', 'dir', or whatever else it carries.
+#
+# A level-based export splits at a tree depth, and what sits at that depth is usually a repository
+# but not always: one reported export had 9 of 689 documents describing elements that are not
+# t="repository", every one of them emitting zero components. To a consumer that is
+# indistinguishable from a repository with no dependencies, and the two mean opposite things -
+# 'nothing to report' versus 'this is not the kind of thing that reports'.
+#
+# component.type cannot say it: CycloneDX closes that enum and has no 'repository' value, so the
+# namespaced property is the schema-lawful place. Same reasoning that put elementPath here.
+ELEMENT_TYPE_PROPERTY = 'softagram:elementType'
+
 
 def _add_element_location(component, elem):
-    """Publish where elem sits in the model, on a component that describes elem.
+    """Publish where elem sits in the model, and what the model calls it, on a component for elem.
 
     'group' carries the parent's full path rather than its bare name so that two identically
     named groups under different roots stay distinguishable, and is omitted for a top-level
@@ -902,6 +938,20 @@ def _add_element_location(component, elem):
     false on component, leaving properties[] as the only schema-valid place for it. It is also
     the exact string deterministic_serial() hashes, so publishing it verbatim lets a consumer
     verify the document's identity without loading the model.
+
+    The element type is published ONLY when the model carries one, and this is the whole of the
+    decision. Repo elements are not required to carry a 'type' attribute - _add_vcs_reference
+    documents that same fact, and builds its ancestor walk around it - so an absent attribute is
+    evidence of nothing. Emitting a sentinel there, 'unknown' or an empty string, would convert
+    "the model did not say" into a positive claim that this element is not a repository, and a
+    consumer filtering on elementType != 'repository' would then exclude genuine repositories on
+    the strength of a value invented here. That is the same false inference the property exists to
+    remove, relocated one layer along rather than fixed. An absent property reads as "not stated",
+    which is the truth, and the honest repair for the silence itself is analyzer-side.
+
+    str(): the model stores attributes untyped, and CycloneDX types properties[].value as a string
+    in every version this generator can declare. A non-string reaching the document would not
+    degrade one field, it would make a validating consumer discard the entire SBOM.
 
     Call once per component: this overwrites 'group' and appends to 'properties'. elem must be
     attached to a model. A detached element is not merely unsupported here, it is dangerous:
@@ -916,6 +966,12 @@ def _add_element_location(component, elem):
         'name': ELEMENT_PATH_PROPERTY,
         'value': elem.getPath()
     })
+    element_type = elem.attrs.get('type')
+    if element_type:
+        component['properties'].append({
+            'name': ELEMENT_TYPE_PROPERTY,
+            'value': str(element_type)
+        })
 
 
 def _add_vcs_reference(component, elem):
@@ -952,11 +1008,33 @@ def _add_vcs_reference(component, elem):
         ancestor = ancestor.parent
 
 
+def _validated_spec_version(spec_version):
+    """The requested CycloneDX version, once it is one this generator can honestly declare.
+
+    The value reaches specVersion untouched, so an unchecked one would produce a document
+    claiming conformance to a specification nothing verified it against. That failure is
+    peculiarly hard to diagnose downstream: the only evidence is a version number, which looks
+    deliberate, and a consumer that cannot parse it reports a malformed document rather than a
+    wrong version.
+
+    Raised rather than silently corrected to the default, for the reason _validated_max_depth
+    gives: a substitution answers a different question than the one asked while looking exactly
+    like the answer to it. The message carries the whole supported set because a caller who
+    reached for an unsupported version needs to know where the range actually is, and the web API
+    turns a ValueError from this module into a validation error for the request that carried it.
+    """
+    if spec_version not in SUPPORTED_SPEC_VERSIONS:
+        raise ValueError(
+            f'Unsupported CycloneDX spec version {spec_version!r}; '
+            f'supported versions are {", ".join(SUPPORTED_SPEC_VERSIONS)}')
+    return spec_version
+
+
 class SBOM:
 
     BASIC_INFO = {
         'bomFormat': 'CycloneDX',
-        'specVersion': '1.7',
+        'specVersion': DEFAULT_SPEC_VERSION,
         'serialNumber': '<REPLACED LATER>',  # TODO what?
         'version': 1,
         'metadata': {
@@ -969,12 +1047,20 @@ class SBOM:
         }
     }
 
-    def __init__(self):
+    def __init__(self, spec_version=DEFAULT_SPEC_VERSION):
         self.metadata_component = {}
         self.components = []
+        self.spec_version = _validated_spec_version(spec_version)
 
     def as_cyclonedx_json(self):
         data = copy.deepcopy(SBOM.BASIC_INFO)
+
+        # Written onto the COPY, never into BASIC_INFO. The dict is class-level and shared by
+        # every SBOM ever built in the process, so a per-call value stored there would not
+        # produce a wrong document — it would produce a wrong NEXT document, in every export
+        # that followed, for the lifetime of the process. Assigning to a key that already
+        # exists also keeps its position, so the serialised field order is unchanged.
+        data['specVersion'] = self.spec_version
 
         # RFC 3339 format
         data['metadata']['timestamp'] = datetime.now().isoformat() + 'Z'
@@ -1042,11 +1128,16 @@ def analyze_component_section(elem, sbom):
     sbom.metadata_component = c
 
 
-def generate_from_sgraph(sgraph: SGraph):
+def generate_from_sgraph(sgraph: SGraph, spec_version: str = DEFAULT_SPEC_VERSION):
     """
+    :param sgraph: The loaded SGraph model
+    :param spec_version: CycloneDX specification version to declare, one of
+        SUPPORTED_SPEC_VERSIONS. The content is identical across the range; only the declared
+        version differs, so this selects what a consumer will accept rather than what it receives.
     :return:
+    :raises ValueError: When spec_version is not one this generator supports
     """
-    sbom = SBOM()
+    sbom = SBOM(spec_version)
     for elem in sgraph.rootNode.children:
         for repo_or_ext in elem.children:
             if repo_or_ext.name == 'External' and repo_or_ext.getType() not in {'dir', 'repo'}:
@@ -1718,9 +1809,9 @@ def _multi_sbom_context(sgraph, level):
 
 
 def _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals=False,
-                              max_depth=None):
+                              max_depth=None, spec_version=DEFAULT_SPEC_VERSION):
     """One CycloneDX SBOM dict for one content element of a level context."""
-    sbom = SBOM()
+    sbom = SBOM(spec_version)
     path = orig_elem.getPath()
     serial = ctx['elem_serials'][path]
     ref = ctx['elem_bom_refs'][path]
@@ -1822,8 +1913,9 @@ def _validated_max_depth(max_depth):
 
 def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3, transitive: bool = False,
                                transitive_externals: bool = False,
-                               max_depth: int | None = None) -> list[dict]:
-    """Generate one CycloneDX 1.7 SBOM per element at the given level.
+                               max_depth: int | None = None,
+                               spec_version: str = DEFAULT_SPEC_VERSION) -> list[dict]:
+    """Generate one CycloneDX SBOM per element at the given level.
 
     :param sgraph: The loaded SGraph model
     :param level: Tree depth at which to split into separate SBOMs
@@ -1836,20 +1928,28 @@ def generate_multi_from_sgraph(sgraph: SGraph, level: int = 3, transitive: bool 
         existing consumer of the default output must keep receiving exactly what it received.
     :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
         for the whole closure. 1 or greater.
+    :param spec_version: CycloneDX specification version to declare, one of
+        SUPPORTED_SPEC_VERSIONS. The content is identical across the range; only the declared
+        version differs, so this selects what a consumer will accept rather than what it receives.
     :return: List of CycloneDX SBOM dicts
-    :raises ValueError: When max_depth is below 1
+    :raises ValueError: When max_depth is below 1, or when spec_version is not supported
     """
     max_depth = _validated_max_depth(max_depth)
+    # Validated before the model is walked rather than per document, so a bad version costs one
+    # rejection instead of a full generalization pass over a model with thousands of elements.
+    spec_version = _validated_spec_version(spec_version)
     ctx = _multi_sbom_context(sgraph, level)
-    return [_sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth)
+    return [_sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth,
+                                      spec_version)
             for orig_elem in ctx['orig_content_elements']]
 
 
 def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
                                      transitive: bool = False,
                                      transitive_externals: bool = False,
-                                     max_depth: int | None = None) -> dict:
-    """Generate one CycloneDX 1.7 SBOM for the element at the given path.
+                                     max_depth: int | None = None,
+                                     spec_version: str = DEFAULT_SPEC_VERSION) -> dict:
+    """Generate one CycloneDX SBOM for the element at the given path.
 
     The element (typically /Project/repo or /Project/repo/dir) becomes the SBOM's metadata
     component and its descendants define the scope. Its peers at the same tree depth form the
@@ -1866,11 +1966,15 @@ def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
         existing consumer of the default output must keep receiving exactly what it received.
     :param max_depth: Deepest dependency depth to emit when transitive_externals is set, or None
         for the whole closure. 1 or greater.
+    :param spec_version: CycloneDX specification version to declare, one of
+        SUPPORTED_SPEC_VERSIONS. The content is identical across the range; only the declared
+        version differs, so this selects what a consumer will accept rather than what it receives.
     :return: One CycloneDX SBOM dict
     :raises ValueError: When no element exists at the path, when it is in the External subtree,
-        or when max_depth is below 1
+        when max_depth is below 1, or when spec_version is not supported
     """
     max_depth = _validated_max_depth(max_depth)
+    spec_version = _validated_spec_version(spec_version)
     path = element_path.rstrip('/')
     if not path.startswith('/'):
         raise ValueError(f"Element path must be absolute (start with '/'): {element_path}")
@@ -1887,7 +1991,8 @@ def generate_for_element_from_sgraph(sgraph: SGraph, element_path: str,
         # not content to root an SBOM at.
         raise ValueError(f'Element at {path} is in the External subtree, not content')
 
-    return _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth)
+    return _sbom_for_content_element(orig_elem, ctx, transitive, transitive_externals, max_depth,
+                                     spec_version)
 
 
 if __name__ == '__main__':
@@ -1916,6 +2021,16 @@ if __name__ == '__main__':
     parser.add_argument('--max-depth', type=int, default=None,
                         help='Deepest dependency depth to emit with --transitive-externals. '
                              'Without it the whole closure is emitted.')
+    # choices rather than a hand-written check: argparse already names the flag as typed and
+    # lists the accepted values, which is exactly what the --max-depth guard below spells out by
+    # hand because a bare ValueError from the generator would not.
+    parser.add_argument('--spec-version', default=DEFAULT_SPEC_VERSION,
+                        choices=SUPPORTED_SPEC_VERSIONS,
+                        help='CycloneDX specification version to declare. The document content '
+                             'is identical across these versions; only the declared version '
+                             f'differs. Defaults to {DEFAULT_SPEC_VERSION}, which the deployed '
+                             'SBOM tooling can read — ask for a newer one only when the '
+                             'consuming tool is known to support it.')
     parser.add_argument('--coverage', action='store_true',
                         help='State what the document does NOT cover: four metadata properties '
                              'counting what was and was not identified under External, and a '
@@ -1951,13 +2066,18 @@ if __name__ == '__main__':
         result = generate_for_element_from_sgraph(g, args.element_path,
                                                   transitive=args.transitive,
                                                   transitive_externals=args.transitive_externals,
-                                                  max_depth=args.max_depth)
+                                                  max_depth=args.max_depth,
+                                                  spec_version=args.spec_version)
     elif args.level is not None:
         result = generate_multi_from_sgraph(g, level=args.level, transitive=args.transitive,
                                             transitive_externals=args.transitive_externals,
-                                            max_depth=args.max_depth)
+                                            max_depth=args.max_depth,
+                                            spec_version=args.spec_version)
     else:
-        result = generate_from_sgraph(g)
+        # Unlike the closure flags, --spec-version is honoured here too: the single-document mode
+        # would not silently ignore it, and refusing it would strand the one export shape that
+        # has no --level behind the version its consumer cannot read.
+        result = generate_from_sgraph(g, spec_version=args.spec_version)
         if args.coverage:
             # Imported here rather than at module level, and the local import IS the design: this
             # module must not depend on external_identification, which imports it. The generator
