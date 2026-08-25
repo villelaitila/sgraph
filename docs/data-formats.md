@@ -242,7 +242,7 @@ converter.convert('model.xml', 'graph.graphml')
 
 ## CycloneDX SBOM Format
 
-`sgraph.converters.sbom_cyclonedx_generator` emits CycloneDX 1.7 documents. It can produce a
+`sgraph.converters.sbom_cyclonedx_generator` emits CycloneDX documents. It can produce a
 single SBOM for the whole model, one SBOM per element at a chosen tree depth (`--level`), or one
 for a named element (`--element-path`).
 
@@ -250,6 +250,33 @@ for a named element (`--element-path`).
 # One SBOM per repository, for a model whose repositories sit at depth 3
 python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json --level 3
 ```
+
+### The declared specification version
+
+Documents declare **CycloneDX 1.6** by default. `--spec-version` selects another of `1.4`, `1.5`,
+`1.6` and `1.7`; anything else is refused rather than passed through to `specVersion`.
+
+The document content is identical across that whole range — only the declared version differs.
+Every document the generator can produce validates against the official bom-1.4, bom-1.5 and
+bom-1.6 schemas with nothing but the version string swapped, and those schemas set
+`additionalProperties: false` at both the document root and the component, so nothing in the
+output requires the newest specification.
+
+What the version does decide is whether a consumer will read the document at all. CycloneDX 1.7
+was published in October 2025, and a tool built against an earlier library rejects a 1.7 document
+on the version string alone, before reading any of its content. Hence the default: 1.6 carries
+the same information to a far larger installed base. Ask for 1.7 when the consuming tool is known
+to support it.
+
+```bash
+# For a consumer that supports the newest specification
+python -m sgraph.converters.sbom_cyclonedx_generator model.xml sboms.json \
+    --level 3 --spec-version 1.7
+```
+
+The same selection is available on `generate_from_sgraph`, `generate_multi_from_sgraph` and
+`generate_for_element_from_sgraph` as a `spec_version` keyword. 1.3 is deliberately not offered:
+it is permissive where the later schemas are strict, so conformance to it could not be checked.
 
 ### The transitive dependency closure
 

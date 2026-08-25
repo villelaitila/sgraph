@@ -63,9 +63,9 @@ def test_generate_multi_sboms_at_level_3():
     names = sorted([sbom['metadata']['component']['name'] for sbom in result])
     assert names == ['repoA', 'repoB']
 
-    # Each SBOM should have specVersion 1.7
+    # Each SBOM should have the default specVersion
     for sbom in result:
-        assert sbom['specVersion'] == '1.7'
+        assert sbom['specVersion'] == '1.6'
         assert sbom['serialNumber'].startswith('urn:uuid:')
 
     # Serial numbers should be deterministic (different per repo)
@@ -2617,9 +2617,12 @@ def test_the_emission_fixture_yields_fourteen_distinct_components():
 
 
 # CycloneDX defines properties[].value as a string in every spec version the generator can emit
-# (verified against the 1.6 and 1.7 schemas, which both declare {"type": "string"} and set
-# additionalProperties false). A number there is not a lenient-consumer problem: a validating
-# consumer rejects the entire document, so one mistyped property discards the whole SBOM.
+# (verified against the 1.4, 1.5, 1.6 and 1.7 schemas, all of which declare {"type": "string"};
+# 1.6 and 1.7 additionally set additionalProperties false on the property object, where 1.4 and
+# 1.5 leave it open). A number there is not a lenient-consumer problem: a validating consumer
+# rejects the entire document, so one mistyped property discards the whole SBOM. The selectable
+# version does not soften this — the type is the same at the oldest version offered, so the rule
+# holds whichever one a caller picks.
 
 
 def model_with_indirect_exposure():
@@ -3888,3 +3891,338 @@ def test_a_suppressed_advisory_row_is_referenced_nowhere_in_the_document():
     document = json.dumps(sbom_cyclonedx_generator.generate_from_sgraph(model))
 
     assert '>=8.0.0' not in document
+
+
+# --- Selectable CycloneDX specification version ---
+#
+# The generator declared 1.7 and nothing else. CycloneDX 1.7 was published in October 2025, so a
+# consumer built against a library released before that cannot parse the document at all — it is
+# rejected on the version string, before any of its content is read. A measured instance runs
+# Dependency-Track 4.12.0 on cyclonedx-core-java 9.0.5, which is exactly that case, and the whole
+# export is unusable there.
+#
+# Nothing in the output needs 1.7. Every document this generator can produce — 912 of them, from
+# 20 real models, in single, per-level and coverage modes — validates against the official
+# bom-1.4, bom-1.5 and bom-1.6 schemas with only the version string swapped, and those schemas set
+# additionalProperties:false at both the document root and the component, so the result is a
+# statement about the content rather than a permissive schema declining to look. bom-1.3 is
+# permissive and is deliberately NOT offered.
+#
+# So the default moved to 1.6: identical information, readable by the deployed estate. 1.7 remains
+# available to a caller that asks for it by name.
+
+SUPPORTED_SPEC_VERSIONS = ('1.4', '1.5', '1.6', '1.7')
+
+DEFAULT_SPEC_VERSION = '1.6'
+
+
+def test_the_default_spec_version_is_one_the_deployed_estate_can_read():
+    """1.6 rather than 1.7, on every public entry point.
+
+    Pinned as a literal in all three places rather than read from the module constant. A test
+    that compares the output against the same constant the output is built from passes whatever
+    that constant says, which is precisely the change this asserts against.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    assert sbom_cyclonedx_generator.generate_from_sgraph(model)['specVersion'] == '1.6'
+    assert all(document['specVersion'] == '1.6'
+               for document in generate_multi_from_sgraph(model, level=3))
+    assert generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA')['specVersion'] == '1.6'
+
+
+def test_each_supported_spec_version_reaches_every_entry_point():
+    """The requested version is what the document declares, on all three generators.
+
+    Asserted per entry point rather than once, because each threads the value through a different
+    call path: the legacy generator builds one SBOM directly, while the level and element modes
+    both go through the shared per-element builder.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    for version in SUPPORTED_SPEC_VERSIONS:
+        single = sbom_cyclonedx_generator.generate_from_sgraph(model, spec_version=version)
+        assert single['specVersion'] == version
+
+        multi = generate_multi_from_sgraph(model, level=3, spec_version=version)
+        assert [document['specVersion'] for document in multi] == [version] * len(multi)
+
+        one = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA',
+                                               spec_version=version)
+        assert one['specVersion'] == version
+
+
+def test_an_unsupported_spec_version_is_refused_naming_the_ones_that_work():
+    """Refused rather than passed through, and the message has to carry the way out.
+
+    A version string reaches the document untouched, so an unchecked value would produce a
+    document declaring a specification it does not conform to — invalid in a way no consumer can
+    diagnose, since the only evidence is a version number that looks deliberate. 1.3 is in the
+    sample deliberately: it is a real CycloneDX version, and a caller reaching for an older one
+    still has to be told where the floor is.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    for rejected in ('1.3', '1.8', '1.6.0', 'latest', ''):
+        for call in (lambda v: sbom_cyclonedx_generator.generate_from_sgraph(model,
+                                                                             spec_version=v),
+                     lambda v: generate_multi_from_sgraph(model, level=3, spec_version=v),
+                     lambda v: generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA',
+                                                                spec_version=v)):
+            with pytest.raises(ValueError) as excinfo:
+                call(rejected)
+            message = str(excinfo.value)
+            assert all(supported in message for supported in SUPPORTED_SPEC_VERSIONS), message
+
+
+def test_a_requested_spec_version_cannot_leak_into_the_next_call():
+    """BASIC_INFO is class-level and mutable, so a per-call value written into it would persist.
+
+    The failure this forecloses is not a wrong document but a wrong LATER document: one export
+    asks for 1.4, and every subsequent export in the same process silently declares 1.4 as well.
+    In a long-lived server that is the normal case rather than the exceptional one, and it is
+    invisible from the call that caused it. Both halves are asserted — the next call's output,
+    and the class attribute itself — because the second is what makes the first true, and a fix
+    that only defends the observable half would leave the shared dict poisoned for anything else
+    that reads it.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    sbom_cyclonedx_generator.generate_from_sgraph(model, spec_version='1.4')
+
+    assert sbom_cyclonedx_generator.generate_from_sgraph(model)['specVersion'] == '1.6'
+    assert sbom_cyclonedx_generator.SBOM.BASIC_INFO['specVersion'] == '1.6'
+
+
+def without_the_fields_allowed_to_move(document):
+    """The document minus the three fields that legitimately differ between two generations.
+
+    specVersion is the subject of the comparison. metadata.timestamp is the generation time, and
+    serialNumber is minted from uuid4 by the legacy single-document mode, so both differ between
+    any two calls whatever else is held fixed. Everything else must be identical, and stating the
+    exclusions here rather than inside each assertion keeps the list of what is forgiven short
+    enough to read.
+    """
+    stripped = copy.deepcopy(document)
+    stripped.pop('specVersion', None)
+    stripped.pop('serialNumber', None)
+    stripped.get('metadata', {}).pop('timestamp', None)
+    return stripped
+
+
+def test_the_spec_version_is_the_only_thing_the_spec_version_changes():
+    """Selecting a version must relabel the document, not reshape it.
+
+    This is the claim the default change rests on: the content is identical across the supported
+    range, so moving the default loses a consumer nothing. Asserted by generating the same model
+    at every supported version and comparing whole documents, which catches a conditional emitted
+    per version far more reliably than checking the fields anyone thought to name.
+    """
+    model, _ = get_model_and_model_api(MULTI_MODEL)
+
+    reference = without_the_fields_allowed_to_move(
+        sbom_cyclonedx_generator.generate_from_sgraph(model, spec_version=DEFAULT_SPEC_VERSION))
+
+    for version in SUPPORTED_SPEC_VERSIONS:
+        document = sbom_cyclonedx_generator.generate_from_sgraph(model, spec_version=version)
+        assert without_the_fields_allowed_to_move(document) == reference, version
+
+
+# Enumerated from bom-1.6.schema.json (http://cyclonedx.org/schema/bom-1.6.schema.json), the
+# default specVersion, at the object levels this generator actually emits. The schema sets
+# additionalProperties:false at every one of them, so a key outside these sets does not merely
+# read oddly — it makes the whole document invalid, and a validating consumer discards the entire
+# SBOM rather than the offending field.
+#
+# Held as key sets here rather than by validating against a vendored copy of the schema, for
+# three reasons. The schema does not constrain specVersion at all (it is {"type": "string"} with
+# no enum, in 1.4, 1.5 and 1.6 alike), so validating against it cannot test the selection this
+# section is about; what rejects 1.7 is the consumer's own version dispatch, which no schema
+# reproduces. bom-1.6 is 262 KB and $refs spdx.schema.json and jsf-0.82.schema.json, so vendoring
+# it means committing 332 KB of third-party JSON. And it would add jsonschema as a test
+# dependency to a library that declares three runtime ones. What a vendored schema would really
+# buy is this additionalProperties check, and this states it in a form a reviewer can read.
+#
+# CycloneDX adds members across versions and does not remove them, so drift in these sets makes
+# the test permissive rather than falsely red.
+CYCLONEDX_1_6_KEYS = {
+    'bom': {'$schema', 'annotations', 'bomFormat', 'components', 'compositions', 'declarations',
+            'definitions', 'dependencies', 'externalReferences', 'formulation', 'metadata',
+            'properties', 'serialNumber', 'services', 'signature', 'specVersion', 'version',
+            'vulnerabilities'},
+    'metadata': {'authors', 'component', 'licenses', 'lifecycles', 'manufacture', 'manufacturer',
+                 'properties', 'supplier', 'timestamp', 'tools'},
+    'tool': {'externalReferences', 'hashes', 'name', 'vendor', 'version'},
+    'component': {'author', 'authors', 'bom-ref', 'components', 'copyright', 'cpe',
+                  'cryptoProperties', 'data', 'description', 'evidence', 'externalReferences',
+                  'group', 'hashes', 'licenses', 'manufacturer', 'mime-type', 'modelCard',
+                  'modified', 'name', 'omniborId', 'pedigree', 'properties', 'publisher', 'purl',
+                  'releaseNotes', 'scope', 'signature', 'supplier', 'swhid', 'swid', 'tags',
+                  'type', 'version'},
+    'externalReference': {'comment', 'hashes', 'type', 'url'},
+    'property': {'name', 'value'},
+    'dependency': {'dependsOn', 'provides', 'ref'},
+    'composition': {'aggregate', 'assemblies', 'bom-ref', 'dependencies', 'signature',
+                    'vulnerabilities'},
+}
+
+
+def objects_by_cyclonedx_kind(document):
+    """Yield (kind, object) for every schema-governed object in a document.
+
+    Components nest, and the nested ones are governed by the same definition as the outermost,
+    so the walk recurses rather than reading one level. A caller gets every object the schema has
+    an opinion about, which is what makes the assertion over it exhaustive instead of a sample.
+    """
+    yield 'bom', document
+
+    metadata = document.get('metadata', {})
+    if metadata:
+        yield 'metadata', metadata
+    for tool in metadata.get('tools', []):
+        yield 'tool', tool
+
+    def walk_component(component):
+        yield 'component', component
+        for reference in component.get('externalReferences', []):
+            yield 'externalReference', reference
+        for prop in component.get('properties', []):
+            yield 'property', prop
+        for nested in component.get('components', []):
+            yield from walk_component(nested)
+
+    if metadata.get('component'):
+        yield from walk_component(metadata['component'])
+    for component in document.get('components', []):
+        yield from walk_component(component)
+
+    for dependency in document.get('dependencies', []):
+        yield 'dependency', dependency
+    for composition in document.get('compositions', []):
+        yield 'composition', composition
+
+
+def test_every_key_the_default_document_carries_is_one_the_default_version_defines():
+    """The document declares 1.6, so every key in it has to be a key 1.6 defines.
+
+    Offline and dependency-free by construction: the claim is checked against the enumerated key
+    sets above, so it runs anywhere pytest runs. Run over the coverage document as well as the
+    plain one, because compositions is reachable no other way and is the one section whose
+    membership genuinely differs between 1.4 and 1.5.
+    """
+    from sgraph.converters.external_identification import (attach_coverage_compositions,
+                                                           attach_coverage_summary,
+                                                           external_coverage_report)
+
+    for model_file in (MULTI_MODEL, EMISSION_MODEL, MAVEN_COORDINATES_MODEL, BINARY_REFS_MODEL,
+                       'converters/modelfile_for_sbom_tests.xml'):
+        model, _ = get_model_and_model_api(model_file)
+
+        plain = sbom_cyclonedx_generator.generate_from_sgraph(model)
+        report = external_coverage_report(model)
+        covered = attach_coverage_compositions(
+            attach_coverage_summary(sbom_cyclonedx_generator.generate_from_sgraph(model), report),
+            report)
+
+        for document in (plain, covered, *generate_multi_from_sgraph(model, level=3)):
+            assert document['specVersion'] == DEFAULT_SPEC_VERSION, model_file
+            for kind, obj in objects_by_cyclonedx_kind(document):
+                unexpected = set(obj) - CYCLONEDX_1_6_KEYS[kind]
+                assert not unexpected, (model_file, kind, sorted(unexpected))
+
+
+def test_the_oldest_stored_fixture_takes_the_new_default_like_every_other():
+    """A model shaped by an analyzer three years older than this change, exported at the default.
+
+    modelfile_for_sbom_tests.xml has been in the tree since April 2023 and carries none of the
+    attributes the later fixtures were written around — no version_kind, no declaring scope, no
+    package coordinates. SBOMs are generated on demand from stored models with a multi-month
+    lifetime, so the generator meets shapes like this one long after the analyzer moved on, and a
+    version default proven only on fixtures written in lockstep with today's analyzer is proven
+    on the easy half of the corpus.
+
+    Six components, deliberately restated from test_filter_model: the point is that changing the
+    declared version changed the inventory not at all, and an assertion on the version alone
+    would hold just as well if every component had vanished.
+    """
+    model, _ = get_model_and_model_api('converters/modelfile_for_sbom_tests.xml')
+
+    document = sbom_cyclonedx_generator.generate_from_sgraph(model)
+
+    assert document['specVersion'] == DEFAULT_SPEC_VERSION
+    assert document['bomFormat'] == 'CycloneDX'
+    assert len(document['components']) == 6
+
+    for version in SUPPORTED_SPEC_VERSIONS:
+        older = sbom_cyclonedx_generator.generate_from_sgraph(model, spec_version=version)
+        assert older['specVersion'] == version
+        assert without_the_fields_allowed_to_move(older) == \
+            without_the_fields_allowed_to_move(document)
+
+
+def test_cli_selects_the_spec_version(tmp_path):
+    """--spec-version reaches the generator, and without it the CLI emits the default."""
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+
+    for flag, expected in (([], DEFAULT_SPEC_VERSION), (['--spec-version', '1.7'], '1.7'),
+                           (['--spec-version', '1.4'], '1.4')):
+        out_path = tmp_path / f'sboms{expected}.json'
+        proc = subprocess.run(
+            [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+             model_path, str(out_path), '--level', '3', *flag],
+            capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+
+        result = json.loads(out_path.read_text())
+        assert [document['specVersion'] for document in result] == [expected] * len(result)
+
+
+def test_cli_selects_the_spec_version_in_the_legacy_single_document_mode(tmp_path):
+    """The legacy mode takes the flag too, unlike the closure flags which it rejects.
+
+    Asserted separately because that asymmetry is deliberate and easy to get wrong in either
+    direction: --transitive-externals is refused there since the single-document walk would
+    ignore it, while a version selection is honoured by every mode and refusing it would strand
+    the one export shape that has no --level.
+    """
+    import json
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    out_path = tmp_path / 'single.json'
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(out_path), '--spec-version', '1.5'],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+    assert json.loads(out_path.read_text())['specVersion'] == '1.5'
+
+
+def test_cli_rejects_an_unsupported_spec_version(tmp_path):
+    """Rejected before the model is parsed, with the supported versions in the message.
+
+    Reported the way every other CLI misuse in this module is reported — a non-zero exit and a
+    message on stderr naming the flag as typed — rather than as a traceback from the generator.
+    """
+    import subprocess
+    import sys
+    import os
+
+    model_path = os.path.join(os.path.dirname(__file__), 'modelfile_for_sbom_multi_tests.xml')
+    proc = subprocess.run(
+        [sys.executable, '-m', 'sgraph.converters.sbom_cyclonedx_generator',
+         model_path, str(tmp_path / 'out.json'), '--level', '3', '--spec-version', '1.3'],
+        capture_output=True, text=True)
+
+    assert proc.returncode != 0
+    assert '--spec-version' in proc.stderr
+    for supported in SUPPORTED_SPEC_VERSIONS:
+        assert supported in proc.stderr, proc.stderr

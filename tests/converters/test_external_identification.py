@@ -554,8 +554,11 @@ def test_no_ledger_state_can_claim_the_assembly_is_complete():
 def test_a_composition_carries_only_keys_cyclonedx_defines():
     """CycloneDX sets additionalProperties:false on a composition, so an extra key is invalid.
 
-    Enumerated from bom-1.7.schema.json, the specVersion this generator declares. 'aggregate' is
-    the only required member, which is why it is asserted separately rather than by set equality.
+    Enumerated from bom-1.6.schema.json, the default specVersion, where these six are also the
+    full membership in 1.7. 'aggregate' is the only required member, which is why it is asserted
+    separately rather than by set equality. 1.4 defines four of the six — it has neither bom-ref
+    nor vulnerabilities — but the generator emits only aggregate and assemblies, which every
+    supported version defines, so the subset assertion holds across the whole range.
     """
     defined = {'bom-ref', 'aggregate', 'assemblies', 'dependencies', 'vulnerabilities', 'signature'}
     model = SGraph(SElement(None, ''))

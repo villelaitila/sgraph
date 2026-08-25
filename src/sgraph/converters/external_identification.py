@@ -83,9 +83,15 @@ PACKAGE_CLAIMING_CATEGORIES = frozenset({
 SUMMARY_PROPERTIES = ('coverageComponentsEmitted', 'coverageNotAPackage',
                       'coverageVersionUnknownByDesign', 'coverageCouldNotIdentify')
 
-# Composition aggregate values, from bom-1.7.schema.json — the specVersion this generator
-# declares. Three of the ten are reachable from a coverage ledger; the reasoning for which three,
-# and for the one that is deliberately unreachable, is in coverage_compositions.
+# Composition aggregate values, from bom-1.6.schema.json — the default specVersion, whose
+# aggregateType enum holds the same ten values as 1.7's. Three of the ten are reachable from a
+# coverage ledger; the reasoning for which three, and for the one that is deliberately
+# unreachable, is in coverage_compositions.
+#
+# All three named below are also in the 1.4 enum, which defines six values rather than ten
+# (it lacks the first-party/third-party proprietary and opensource refinements added in 1.5).
+# So a coverage document stays valid at every version the generator can declare, and the
+# selectable specVersion does not reach this decision.
 AGGREGATE_INCOMPLETE = 'incomplete'
 AGGREGATE_UNKNOWN = 'unknown'
 AGGREGATE_NOT_SPECIFIED = 'not_specified'
