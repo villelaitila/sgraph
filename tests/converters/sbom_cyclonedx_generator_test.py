@@ -3901,7 +3901,7 @@ def test_no_purl_key_anywhere_in_any_fixture_is_empty():
 
 @pytest.mark.parametrize('fixture,subject,aggregate', [
     ('modelfile_for_sbom_tests.xml', '/nginx', 'unknown'),
-    ('modelfile_for_sbom_emission_tests.xml', '/ExampleOrg', 'incomplete'),
+    ('modelfile_for_sbom_maven_coordinates_tests.xml', '/ExampleOrg', 'incomplete'),
 ])
 def test_cli_coverage_flag_adds_the_completeness_claim(tmp_path, fixture, subject, aggregate):
     """--coverage reaches the document through the CLI, in CycloneDX's own slot.
@@ -3910,6 +3910,15 @@ def test_cli_coverage_flag_adds_the_completeness_claim(tmp_path, fixture, subjec
     externals are all identified and one carrying an external that is not. A single fixture would
     have pinned whichever state it happened to be in, and this one was in the quiet state -- the
     flag could have been wired to a constant and still passed.
+
+    The 'incomplete' side moved from the emission fixture to the maven-coordinates one, and the
+    reason is worth recording. The emission fixture's entire claim to incompleteness was ONE
+    element: /ExampleOrg/External/Unknown_Binary_Files, the root bucket itself, which the old
+    is_root_node did not recognise as a root because it was absent from the ecosystem table, and
+    which was therefore reported as a package the BOM had failed to identify. With that repaired
+    the fixture has nothing unidentified left, and 'unknown' is the true claim for it. The
+    maven-coordinates fixture carries three externals that genuinely cannot be identified, so it
+    exercises 'incomplete' for the reason the test means to exercise it.
 
     The subject is pinned rather than only compared against the document, because reading it out
     of the same document it is asserted against cannot fail.

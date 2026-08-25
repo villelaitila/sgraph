@@ -249,11 +249,24 @@ def is_root_node(elem):
     """Whether this element IS a registry root rather than something under one.
 
     A root node is structure, not an external: `/External/NPM` is where npm packages live, not a
-    package called NPM. Decided by asking whether the element's own External-relative path is a
-    key of the registry, so the registry stays the single place that knows what a root is and a
-    two-level root like Docker/Image is recognised as readily as NPM.
+    package called NPM. A two-level root like Docker/Image is recognised as readily as NPM,
+    because the registry is consulted for exactly that case.
+
+    But the registry is not the ONLY answer, and asking it alone was a defect. A root the tables
+    have no row for — DotNet, TypeScript, Node, Unknown_Binary_Files, and eleven others across the
+    local corpus — was then not a root at all, and the root element itself was classified as an
+    element inside some root: a package candidate that failed identification, named after the
+    bucket it is. `external_root_key` never agreed with that reading, since it falls back to the
+    first segment and so treats those names as root keys; two functions in one module answering
+    "what is a root" differently is the actual bug.
+
+    Depth settles it without a table. An element ONE segment below External is a bucket, whatever
+    is or is not known about what it holds — being unable to say what kind of root something is
+    has no bearing on whether it is one. Checked across the corpus: every depth-1 element under
+    External is a bucket and none is a package.
     """
-    return '/'.join(external_relative_segments(elem)) in ROOT_ECOSYSTEM
+    segments = external_relative_segments(elem)
+    return len(segments) == 1 or '/'.join(segments) in ROOT_ECOSYSTEM
 
 
 def is_stdlib_name(root_key, name):

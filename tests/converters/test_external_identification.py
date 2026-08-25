@@ -429,7 +429,7 @@ def test_attaching_the_summary_adds_the_coverage_counts():
     identification().attach_coverage_summary(document, report)
 
     attached = {prop['name']: prop['value'] for prop in document['metadata']['properties']}
-    assert len(attached) == 4
+    assert len(attached) == 5
     assert all(isinstance(value, str) for value in attached.values())
 
 
@@ -452,8 +452,8 @@ def test_no_generator_path_attaches_the_summary(generate):
         assert 'properties' not in document['metadata']
 
 
-def ledger_state(elements_walked, could_not_identify):
-    """The only two ledger fields coverage_compositions reads, in the real report's shape.
+def ledger_state(elements_walked, could_not_identify, unknown_root_kind=0):
+    """The ledger fields coverage_compositions reads, in the real report's shape.
 
     Hand-built so the grid below can reach states no small model produces. The test above it
     checks this shape against a real report, because a synthetic input that drifted from reality
@@ -475,6 +475,9 @@ def ledger_state(elements_walked, could_not_identify):
                 },
                 ident.OUTCOME_COULD_NOT_IDENTIFY: {
                     'elementCount': could_not_identify
+                },
+                ident.OUTCOME_UNKNOWN_ROOT_KIND: {
+                    'elementCount': unknown_root_kind
                 },
             },
         },
@@ -1390,3 +1393,151 @@ def test_an_element_matching_no_image_clause_is_reported_as_unknown():
     report = identification().external_coverage_report(model)
 
     assert unmatched.getPath() in report['unclassifiedImageElements']
+
+
+# --- Roots the tables have no rule for ---
+#
+# role_of returns ROLE_UNKNOWN for any root absent from ROOT_KINDS, and _classify had no branch
+# for that role, so it fell through to the final return: package_candidate_without_version, whose
+# outcome is couldNotIdentify. "We have no rule for this kind of root" was therefore published as
+# "we tried to identify a third-party package here and failed".
+#
+# Measured over the 20 local models, that single fall-through is 80 659 elements, of which 68 689
+# sit under one root. The population is not packages: TypeScript type symbols, Odoo XML record
+# ids, Java and Android namespace segments, Node builtins, and an analyzer's binary-file bucket
+# whose 1 244 members carry zero incoming references between them. A headline dominated by those
+# overstates the identification problem by more than an order of magnitude, and a number that
+# overstates gets discounted rather than acted on.
+#
+# THE DISTINCTION THIS RESTS ON is the one ROOT_KINDS states about itself: "A root absent from
+# this table is unknown, which is a different fact from a root that is known to assert no
+# ecosystem." Docker, JVM and Java are IN the table mapped to an empty set — they are known to
+# assert no kind, and they keep exactly today's answer. Only genuine absence reaches the new
+# category.
+#
+# What is deliberately NOT claimed: that these elements are not packages. Some of them plainly
+# are — a JavaScript or TypeScript root holds real npm packages at package depth. Asserting
+# notAPackage would be the same unfounded claim in the opposite direction. The new outcome says
+# what is true and no more: this element sits under a root this library has no rule for, so no
+# statement about its identification is available either way. That is why it is a separate
+# outcome rather than a re-labelling into one of the four.
+
+
+def unknown_root_model():
+    """A root the tables have no rule for, holding both a package and a symbol under it."""
+    model = SGraph(SElement(None, ''))
+    external(model, 'TypeScript/vue-router', referenced_by='a.ts', deptype='import')
+    external(model, 'TypeScript/vue-router/type Router', referenced_by='b.ts', deptype='import')
+    return model
+
+
+def test_an_unknown_root_is_recognised_as_a_root_whatever_the_tables_say():
+    """is_root_node asked the ECOSYSTEM table, so a root it had no row for was not a root.
+
+    external_root_key already disagrees with it: that function falls back to the first segment, so
+    it treats 'TypeScript' as a root key while is_root_node does not. Two functions in one module
+    answering "what is a root" differently is the defect, and depth is the answer that does not
+    depend on a table — an element one segment below External is a bucket, not something in one.
+    """
+    model = unknown_root_model()
+    root = external_root_of(model)
+    semantics = __import__('sgraph.converters.external_root_semantics', fromlist=['x'])
+
+    typescript = next(child for child in root.children if child.name == 'TypeScript')
+    assert semantics.is_root_node(typescript)
+    assert not semantics.is_root_node(
+        next(child for child in typescript.children if child.name == 'vue-router'))
+
+
+def test_the_root_element_of_an_unknown_root_is_structure_not_a_failed_identification():
+    """/External/TypeScript is where TypeScript things live, not a package called TypeScript."""
+    report = identification().external_coverage_report(unknown_root_model())
+
+    assert category_of(report, '/Org/External/TypeScript') == \
+        identification().CATEGORY_NOT_A_PACKAGE_ROOT
+
+
+def test_an_element_under_a_root_with_no_rule_makes_no_identification_claim():
+    """The core of it: absence of a rule is not a failed identification.
+
+    Both members land here, the package-depth one and the symbol-depth one, and that is
+    deliberate. Telling them apart requires knowing what kind of root TypeScript is, which is
+    exactly what is missing; guessing from depth would be a rule, and inventing one here is how
+    the wrong answer gets locked in.
+    """
+    ident = identification()
+    report = ident.external_coverage_report(unknown_root_model())
+
+    for path in ('/Org/External/TypeScript/vue-router',
+                 '/Org/External/TypeScript/vue-router/type Router'):
+        assert category_of(report, path) == ident.CATEGORY_UNKNOWN_ROOT_KIND, path
+    assert ident.DEFAULT_OUTCOME[ident.CATEGORY_UNKNOWN_ROOT_KIND] == \
+        ident.OUTCOME_UNKNOWN_ROOT_KIND
+
+
+def test_a_root_known_to_assert_no_kind_keeps_exactly_todays_answer():
+    """Docker, JVM and Java are IN the table mapped to an empty set, and must not move.
+
+    This is the whole distinction the change rests on, so it is asserted rather than assumed:
+    'known to assert no kind' and 'no rule at all' are different facts, and a change that
+    collapsed them would silently relabel roots the tables DO have an opinion about.
+    """
+    ident = identification()
+    model = SGraph(SElement(None, ''))
+    external(model, 'JVM/somelib', referenced_by='a.java', deptype='use')
+
+    report = ident.external_coverage_report(model)
+
+    assert category_of(report, '/Org/External/JVM/somelib') == \
+        ident.CATEGORY_PACKAGE_CANDIDATE_WITHOUT_VERSION
+
+
+def test_the_new_bucket_does_not_claim_its_members_are_packages():
+    """PACKAGE_CLAIMING_CATEGORIES decides where 'how many distinct packages' is even defined.
+
+    An element under a root with no rule makes no claim to be a package, so counting distinct
+    packages in it would answer a question its members never asked. Asserted against the frozenset
+    directly, because membership is what the count is derived from.
+    """
+    ident = identification()
+    assert ident.CATEGORY_UNKNOWN_ROOT_KIND not in ident.PACKAGE_CLAIMING_CATEGORIES
+
+
+def test_the_summary_publishes_the_new_count_rather_than_hiding_it():
+    """Nothing is removed from the report; one number is split off under a truthful name.
+
+    The point is honesty rather than a smaller headline, so the count has to remain visible. A
+    fifth fixed-cardinality property keeps the summary's stated property — bounded size, values
+    of distinct meaning — while letting couldNotIdentify mean what it says.
+    """
+    ident = identification()
+    assert 'coverageUnknownRootKind' in ident.SUMMARY_PROPERTIES
+
+    document = sbom_cyclonedx_generator.generate_from_sgraph(unknown_root_model())
+    report = ident.external_coverage_report(unknown_root_model())
+    ident.attach_coverage_summary(document, report)
+
+    published = {p['name']: p['value'] for p in document['metadata']['properties']}
+    assert published['coverageUnknownRootKind'] == '2'
+    assert published['coverageCouldNotIdentify'] == '0'
+    assert all(isinstance(p['value'], str) for p in document['metadata']['properties'])
+
+
+def test_an_unmatched_image_under_a_known_root_is_left_alone():
+    """ROLE_UNKNOWN has a second source, and only one of them is about a missing rule.
+
+    image_structure returns IMAGE_UNMATCHED for a shape the image rules do not recognise, and
+    role_of turns that into ROLE_UNKNOWN too. Docker/Image IS in the tables, so that element must
+    keep today's category — a branch keyed on the role alone would have swept it up and called a
+    known root unknown.
+    """
+    ident = identification()
+    model = SGraph(SElement(None, ''))
+    parent = external(model, 'Docker/Image/app of tag v1', referenced_by='Dockerfile')
+    SElement(parent, 'usr')
+    SElement(model.findElementFromPath('/Org/External/Docker/Image/app of tag v1/usr'), 'lib')
+
+    report = ident.external_coverage_report(model)
+
+    assert category_of(report, '/Org/External/Docker/Image/app of tag v1/usr') != \
+        ident.CATEGORY_UNKNOWN_ROOT_KIND
