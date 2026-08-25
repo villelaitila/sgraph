@@ -1860,6 +1860,122 @@ def test_legacy_single_sbom_carries_the_element_path():
     assert component['bom-ref'] == '/nginx'
 
 
+# --- The model's element type ---
+#
+# A level-based export splits at a tree depth, and what sits at that depth is USUALLY a repository
+# but not always: 9 of 689 documents in one reported export describe elements that are not
+# t="repository" in the model, and all 9 emit zero components. A consumer reading only the
+# document cannot tell those apart from a repository that genuinely has no dependencies, and the
+# two mean very different things.
+#
+# component.type is a closed CycloneDX enum with no 'repository' value, so it cannot carry this;
+# a softagram:-namespaced property is the schema-lawful place, the same reasoning that put
+# elementPath there.
+#
+# Published only when the model actually carries a type. The alternative -- always emitting, with
+# 'unknown' or '' where the attribute is absent -- was rejected, and the reason is written into
+# _add_vcs_reference already: repo elements are NOT required to carry a 'type' attribute. So an
+# absent attribute is not evidence of anything, and a sentinel would convert "the model did not
+# say" into a positive claim that this is not a repository. That is the same false inference the
+# request is trying to escape, moved one layer along. An absent property reads as "not stated",
+# which is what is true.
+
+ELEMENT_TYPE_PROPERTY = 'softagram:elementType'
+
+
+def typed_estate_model():
+    """Two elements at the same depth, one a repository and one not, as the split sees them.
+
+    The shape the request is about: a level-3 export cannot assume what it split on, and the two
+    kinds must be distinguishable in the document alone. 'plain' carries no type at all, which is
+    the third case and the common one on stored models.
+    """
+    model = SGraph(SElement(None, ''))
+    for name, elem_type in (('repoA', 'repository'), ('docsdir', 'dir'), ('plain', None)):
+        elem = model.createOrGetElementFromPath(f'/OrgName/GroupA/{name}')
+        if elem_type is not None:
+            elem.attrs['type'] = elem_type
+        model.createOrGetElementFromPath(f'/OrgName/GroupA/{name}/src/main.cs')
+    return model
+
+
+def test_a_repository_is_told_apart_from_a_non_repository_element():
+    """The request itself: two documents at one level, describing different kinds of thing."""
+    result = generate_multi_from_sgraph(typed_estate_model(), level=3)
+
+    assert find_property(sbom_of(result, 'repoA')['metadata']['component'],
+                         ELEMENT_TYPE_PROPERTY) == 'repository'
+    assert find_property(sbom_of(result, 'docsdir')['metadata']['component'],
+                         ELEMENT_TYPE_PROPERTY) == 'dir'
+
+
+def test_an_untyped_element_publishes_no_type_rather_than_a_guess():
+    """Absence of the attribute is not evidence, so nothing is claimed.
+
+    A repository is not required to carry 'type', so emitting 'unknown' here would let a consumer
+    filtering on elementType != 'repository' exclude a genuine repository on the strength of a
+    value this code invented. Asserted as absence of the KEY rather than as an empty value: an
+    empty string is still a property a consumer must interpret.
+    """
+    result = generate_multi_from_sgraph(typed_estate_model(), level=3)
+
+    component = sbom_of(result, 'plain')['metadata']['component']
+    assert find_property(component, ELEMENT_TYPE_PROPERTY) is None
+    assert ELEMENT_TYPE_PROPERTY not in {p['name'] for p in component.get('properties', [])}
+
+
+def test_every_stored_fixture_is_unchanged_because_none_carries_a_type():
+    """The corpus-safety claim, stated as a test rather than left to the measurement.
+
+    No committed fixture carries a 'type' attribute on a content element, so this property is
+    emitted nowhere in them and every existing consumer of those documents receives exactly what
+    it received. That is what makes the addition inert on stored models rather than merely small.
+    """
+    for model_file in (MULTI_MODEL, MIRRORED_MODEL, 'converters/modelfile_for_sbom_tests.xml'):
+        model, _ = get_model_and_model_api(model_file)
+        for document in generate_multi_from_sgraph(model, level=3):
+            assert find_property(document['metadata']['component'],
+                                 ELEMENT_TYPE_PROPERTY) is None, model_file
+
+
+def test_the_type_reaches_the_legacy_and_inlined_components_too():
+    """One assembly point, so all three components that describe an element get it.
+
+    _add_element_location is called for the legacy single-document subject, for the per-element
+    subject, and for an internal element inlined into another document. A per-call-site addition
+    would have landed on one of the three, and the inlined component is the one that matters most
+    here: it is where a consumer meets an element it did NOT ask for a document about.
+    """
+    model = SGraph(SElement(None, ''))
+    top = model.createOrGetElementFromPath('/OrgName')
+    top.attrs['type'] = 'estate'
+    legacy = sbom_cyclonedx_generator.generate_from_sgraph(model)
+    assert find_property(legacy['metadata']['component'], ELEMENT_TYPE_PROPERTY) == 'estate'
+
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+    for path in ('/OrgName/GroupA/shared', '/OrgName/GroupB/shared'):
+        model.findElementFromPath(path).attrs['type'] = 'repository'
+    result = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    inlined = [c for document in result for c in document['components']
+               if find_property(c, 'softagram:internal') == 'true']
+    assert inlined
+    assert all(find_property(c, ELEMENT_TYPE_PROPERTY) == 'repository' for c in inlined)
+
+
+def test_the_published_type_is_a_string_as_cyclonedx_requires():
+    """properties[].value is typed as a string in every version, and a non-string voids the doc.
+
+    The model stores attributes untyped, so a type attribute holding a non-string would otherwise
+    reach the document unchanged and a validating consumer would discard the whole SBOM over it.
+    """
+    result = generate_multi_from_sgraph(typed_estate_model(), level=3)
+
+    for document in result:
+        for prop in document['metadata']['component'].get('properties', []):
+            assert isinstance(prop['value'], str), prop
+
+
 # --- purl type inference tests ---
 
 BINARY_REFS_MODEL = 'converters/modelfile_for_sbom_binary_refs_tests.xml'

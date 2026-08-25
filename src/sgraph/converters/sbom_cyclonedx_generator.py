@@ -914,9 +914,21 @@ def analyze_3rdparty(external_root, sbom):
 
 ELEMENT_PATH_PROPERTY = 'softagram:elementPath'
 
+# What the MODEL calls this element - 'repository', 'dir', or whatever else it carries.
+#
+# A level-based export splits at a tree depth, and what sits at that depth is usually a repository
+# but not always: one reported export had 9 of 689 documents describing elements that are not
+# t="repository", every one of them emitting zero components. To a consumer that is
+# indistinguishable from a repository with no dependencies, and the two mean opposite things -
+# 'nothing to report' versus 'this is not the kind of thing that reports'.
+#
+# component.type cannot say it: CycloneDX closes that enum and has no 'repository' value, so the
+# namespaced property is the schema-lawful place. Same reasoning that put elementPath here.
+ELEMENT_TYPE_PROPERTY = 'softagram:elementType'
+
 
 def _add_element_location(component, elem):
-    """Publish where elem sits in the model, on a component that describes elem.
+    """Publish where elem sits in the model, and what the model calls it, on a component for elem.
 
     'group' carries the parent's full path rather than its bare name so that two identically
     named groups under different roots stay distinguishable, and is omitted for a top-level
@@ -926,6 +938,20 @@ def _add_element_location(component, elem):
     false on component, leaving properties[] as the only schema-valid place for it. It is also
     the exact string deterministic_serial() hashes, so publishing it verbatim lets a consumer
     verify the document's identity without loading the model.
+
+    The element type is published ONLY when the model carries one, and this is the whole of the
+    decision. Repo elements are not required to carry a 'type' attribute - _add_vcs_reference
+    documents that same fact, and builds its ancestor walk around it - so an absent attribute is
+    evidence of nothing. Emitting a sentinel there, 'unknown' or an empty string, would convert
+    "the model did not say" into a positive claim that this element is not a repository, and a
+    consumer filtering on elementType != 'repository' would then exclude genuine repositories on
+    the strength of a value invented here. That is the same false inference the property exists to
+    remove, relocated one layer along rather than fixed. An absent property reads as "not stated",
+    which is the truth, and the honest repair for the silence itself is analyzer-side.
+
+    str(): the model stores attributes untyped, and CycloneDX types properties[].value as a string
+    in every version this generator can declare. A non-string reaching the document would not
+    degrade one field, it would make a validating consumer discard the entire SBOM.
 
     Call once per component: this overwrites 'group' and appends to 'properties'. elem must be
     attached to a model. A detached element is not merely unsupported here, it is dangerous:
@@ -940,6 +966,12 @@ def _add_element_location(component, elem):
         'name': ELEMENT_PATH_PROPERTY,
         'value': elem.getPath()
     })
+    element_type = elem.attrs.get('type')
+    if element_type:
+        component['properties'].append({
+            'name': ELEMENT_TYPE_PROPERTY,
+            'value': str(element_type)
+        })
 
 
 def _add_vcs_reference(component, elem):
