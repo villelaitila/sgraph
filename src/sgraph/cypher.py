@@ -22,10 +22,20 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from sgraph.selement import SElement
 from sgraph.selementassociation import SElementAssociation
+
+# NumPy 2.0 removed the np.float_ alias, but spycy <= 0.0.3 still references
+# it (toInteger/toFloat/toString and result conversion), crashing with
+# AttributeError under NumPy >= 2.0. Restore the alias before importing spycy.
+# np.float_ was the same object as np.float64 in NumPy 1.x, so this is a
+# no-op there. Remove once a spycy release containing
+# https://github.com/aneeshdurg/spycy/pull/3 is required.
+if not hasattr(np, "float_"):
+    np.float_ = np.float64  # type: ignore[attr-defined]
 
 try:
     from spycy.graph import Graph
