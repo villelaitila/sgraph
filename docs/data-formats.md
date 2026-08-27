@@ -385,7 +385,7 @@ document's own subject, and not a 3rd-party package. It appears as a component m
   "name": "ui-lib",
   "version": "2.1.0",
   "purl": "pkg:generic/ui-lib@2.1.0",
-  "group": "/OrgName/GroupA",
+  "group": "GroupA",
   "properties": [
     { "name": "softagram:internal", "value": "true" },
     { "name": "softagram:packageName", "value": "ui-lib" },
@@ -522,7 +522,7 @@ and every internal component — publishes its position in the model:
 ```json
 { "bom-ref": "repoa",
   "name": "repoA",
-  "group": "/OrgName/GroupA",
+  "group": "GroupA",
   "type": "application",
   "version": "",
   "purl": "",
