@@ -2902,6 +2902,79 @@ def test_a_licensed_versioned_external_still_carries_its_licence():
     }]
 
 
+def _licence_of(model_licence):
+    """The single licences entry emitted for an external carrying `model_licence`."""
+    model = SGraph(SElement(None, ''))
+    elem = referenced_external(model, '/Org/External/NPM/lodash/lodash of version 4.17.21')
+    elem.attrs['version'] = '4.17.21'
+    elem.attrs['license'] = model_licence
+    components = admission_components(model)
+    assert len(components) == 1
+    return components[0].get('licenses')
+
+
+def test_a_licence_that_is_not_a_known_spdx_identifier_is_published_as_a_name():
+    """`id` is enum-constrained; a value we cannot place in it belongs in `name`.
+
+    CycloneDX $refs the SPDX identifier list from license.id, so putting an unrecognised string
+    there does not degrade one field: it makes the WHOLE document fail validation, and a
+    consumer that validates on ingest rejects the entire BOM. One package with an ordinary
+    licence would cost a repository its whole SBOM.
+
+    `name` is the slot the specification designates for a licence it cannot express as an
+    identifier, and it is free text, so the real value survives instead of being replaced by a
+    placeholder that means nothing to anyone.
+    """
+    assert _licence_of('Apache-2.0') == [{'license': {'name': 'Apache-2.0'}}]
+
+
+def test_a_licence_expression_is_published_as_a_name_rather_than_discarded():
+    """Multi-licence strings occur in real models ('AGPL;GPL'), and they are not identifiers.
+
+    They are also not SPDX expressions in the spec's sense, so `expression` would be a claim
+    about syntax this converter has not checked. `name` states what the model said, which is
+    the only thing that is actually known.
+    """
+    assert _licence_of('AGPL;GPL') == [{'license': {'name': 'AGPL;GPL'}}]
+
+
+def test_a_known_spdx_identifier_still_publishes_an_id_and_its_url():
+    """The recognised path is unchanged; widening WHICH values are recognised is separate work."""
+    assert _licence_of('MIT') == [{
+        'license': {
+            'id': 'MIT',
+            'url': 'https://spdx.org/licenses/MIT.html'
+        }
+    }]
+
+
+def test_a_blank_licence_attribute_emits_no_licences():
+    """An attribute present but empty states nothing, so it must read as though it were absent.
+
+    The component always carries a 'licenses' key — it is assembled unconditionally — so the
+    empty list is what "no licence" looks like here, and a blank attribute producing exactly the
+    shape of a missing one is the point. Previously it produced a licences entry claiming
+    'UNKNOWN LICENSE', a fact invented out of an empty string.
+    """
+    assert _licence_of('') == []
+    assert _licence_of('   ') == []
+
+
+def test_no_licence_is_published_with_an_invented_url():
+    """A url is emitted only when a real one is known for the identifier.
+
+    The previous placeholders ('UNKNOWN', 'TODO', '') are not IRIs, and a consumer cannot tell
+    an invented url from a real one — the same reason _add_vcs_reference omits a missing repo_url
+    rather than emitting a blank.
+    """
+    for model_licence in ('Apache-2.0', 'AGPL;GPL', 'OTHER', 'GPL'):
+        entry = _licence_of(model_licence)
+        assert entry is not None
+        licence = entry[0]['license']
+        assert 'url' not in licence, f'{model_licence} published a url it does not have'
+        assert 'id' not in licence, f'{model_licence} reached the enum-constrained id field'
+
+
 def test_a_licence_on_a_code_symbol_emits_nothing():
     """The shape a producer stamping licences on the import graph would trip.
 
