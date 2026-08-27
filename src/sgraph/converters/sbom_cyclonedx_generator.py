@@ -972,9 +972,9 @@ def _add_element_location(component, elem):
     elementPath yields a document a consumer cannot resolve and cannot detect as broken.
     Raising at the call site is the better failure.
     """
-    parent_path = elem.parent.getPath()
-    if parent_path:
-        component['group'] = parent_path.rsplit('/', 1)[-1]
+    parent_name = elem.parent.name
+    if parent_name:
+        component['group'] = parent_name
     component.setdefault('properties', []).append({
         'name': ELEMENT_PATH_PROPERTY,
         'value': elem.getPath()
