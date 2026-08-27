@@ -930,9 +930,22 @@ ELEMENT_TYPE_PROPERTY = 'softagram:elementType'
 def _add_element_location(component, elem):
     """Publish where elem sits in the model, and what the model calls it, on a component for elem.
 
-    'group' carries the parent's full path rather than its bare name so that two identically
-    named groups under different roots stay distinguishable, and is omitted for a top-level
-    element, whose parent is the model root and has no path of its own.
+    'group' carries the parent's bare name, and is omitted for a top-level element, whose
+    parent is the model root and has no name of its own.
+
+    It used to carry the parent's full path, to keep two identically named groups under
+    different roots apart. That traded a collision no measured estate had for two costs every
+    estate paid. CycloneDX defines group as "a shortened, single name of the company or
+    project that produced the component" and asks that special characters be avoided, so a
+    value like '/Estate/AccessManagement' is not what a consumer reading the field expects.
+    Worse, the first path segment is the estate root -- the least stable part of the path --
+    and group is an identity field, so renaming an estate re-identified every component
+    beneath it at once. That happened to a live estate across 689 documents.
+
+    The collision the path guarded against is now accepted knowingly: two same-named groups
+    under different roots share a group value. Identity does not rest on it. The full path is
+    still published verbatim as softagram:elementPath, the document serial is derived from
+    that path, and both still tell such a pair apart.
 
     The element's own path goes into a property because CycloneDX sets additionalProperties:
     false on component, leaving properties[] as the only schema-valid place for it. It is also
@@ -961,7 +974,7 @@ def _add_element_location(component, elem):
     """
     parent_path = elem.parent.getPath()
     if parent_path:
-        component['group'] = parent_path
+        component['group'] = parent_path.rsplit('/', 1)[-1]
     component.setdefault('properties', []).append({
         'name': ELEMENT_PATH_PROPERTY,
         'value': elem.getPath()

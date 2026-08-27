@@ -537,7 +537,7 @@ and every internal component — publishes its position in the model:
 
 | Field | Meaning |
 |-------|---------|
-| `group` | The **full path of the parent element**, not just its name. Omitted for a top-level element, which has no parent path. |
+| `group` | The **name of the parent element**. Omitted for a top-level element, whose parent is the model root and has no name. |
 | `properties[softagram:elementPath]` | The element's own full path. A property rather than a field because the CycloneDX component schema sets `additionalProperties: false`. |
 | `properties[softagram:elementType]` | What the **model** calls this element — `repository`, `dir`, `file`, and so on. **Present only when the model carries a type**; see below. |
 | `externalReferences[type=vcs]` | The `repo_url` of the element, or of the **nearest ancestor** carrying a non-blank one. Absent when no ancestor has one — never a placeholder. |
@@ -581,37 +581,36 @@ Components describing **3rd-party packages** carry none of these. Their identity
   single-SBOM document. This is long-standing behaviour rather than a recent change, and altering
   it would change the identity every existing single-SBOM consumer files the document under, so it
   is documented here rather than quietly repaired.
-- `group + '/' + name == elementPath` below the top level.
-- Two repositories that share a name under different groups are distinguished by `group` and
-  `elementPath`. They are *not* reliably distinguished by `bom-ref`, whose collision suffix
-  (`repoa`, `repoa-2`) depends on traversal order and can change between model generations.
+- `elementPath` ends with `'/' + group + '/' + name` below the top level. `group` is a single
+  segment of the path, not the whole of it — read `elementPath` when you need the location.
+- Two repositories that share a name under **differently named** groups are distinguished by
+  `group` and `elementPath`; under **identically named** groups in different parts of the tree,
+  by `elementPath` alone. They are *not* reliably distinguished by `bom-ref`, whose collision
+  suffix (`repoa`, `repoa-2`) depends on traversal order and can change between model
+  generations.
 
 ### Caveats
 
 - **The first path segment is the estate root and is not stable.** It changes when the estate is
   renamed or restructured. Read it from the path rather than hardcoding it.
-- **`group` holds a path, not a package namespace.** The CycloneDX specification suggests
-  avoiding special characters in `group` and shows package coordinates such as
-  `org.apache.commons`. A model group is a tree location, so this converter puts the parent's
-  full path there. Tools that render `group` as a package coordinate will show the path.
+- **`group` does not identify an element on its own.** It is the parent's name, so two groups
+  that share a name in different parts of the tree — `/Estate/TeamA/tools` and
+  `/Estate/TeamB/tools` — produce the same `group`. Use `properties[softagram:elementPath]` when
+  you need an unambiguous identifier: it is unique across all documents from one model and is the
+  string the serial number is derived from.
 
-  **What the path buys, stated accurately.** It distinguishes two *groups* that share a name under
-  different parents — `/Estate/TeamA/tools` and `/Estate/TeamB/tools` — *in a model that has such
-  a pair*. Many models have none. Measured across three real single-root estates at both level 2
-  and level 3, every full-path `group` value mapped one-to-one onto its bare name (73 → 73, 78 →
-  78, 11 → 11), so the prefix disambiguated nothing in any of them.
+  **This is a deliberate trade, changed in 1.17.0.** `group` previously carried the parent's full
+  path, which kept such a pair apart. Two things made that the worse deal. CycloneDX defines
+  `group` as "a shortened, single name of the company or project that produced the component" and
+  asks that special characters be avoided, so a path was not what a consumer reading the field
+  expects. More seriously, the first path segment is the estate root — the least stable part of
+  the path — and `group` is an identity field, so renaming an estate re-identified every component
+  beneath it at once. The collision the path guarded against was not observed in any of ten real
+  estates measured, where every full-path `group` mapped one-to-one onto its bare name; the rename
+  cost was observed, across 689 documents in a live estate.
 
-  So the path is a guarantee that holds for *every* model, not a fix for a collision every model
-  has, and a reader should not infer that their own `group` values would collide without it. Note
-  the collision it guards against is between **groups**; two repositories sharing a name under
-  *differently* named groups are already distinguished by the group name alone.
-
-  **If you want the bare name, take it from the path**; the last segment is the parent's name.
-  And if you want an unambiguous identifier for the element itself, use
-  `properties[softagram:elementPath]`, which is unique across all documents from one model and is
-  the string the serial number is derived from — `group` is not the field to reach for. Note the
-  first path segment is the estate root and changes when the estate is renamed, so anything
-  derived from `group` inherits that instability.
+  **Consumers who parsed the path out of `group` should read `softagram:elementPath` instead**,
+  which is unchanged and still carries the full path.
 - **`purl` and `version` are empty on the metadata component**, and on an internal component
   whose element publishes no unambiguous package. A repository has no package identity and no
   version of its own; a path is not a valid purl and is deliberately not placed there. An

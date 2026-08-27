@@ -4,6 +4,13 @@ Design for a change to `src/sgraph/converters/sbom_cyclonedx_generator.py`.
 
 Baseline: sgraph **1.9.0** (`upstream/main` @ `fb65e0d`), 237 tests green.
 
+> **Partly superseded in 1.17.0.** This document specifies `group` as the parent element's
+> *full path*. That was changed to the parent's *bare name*: the path put the unstable estate
+> root inside an identity field, and CycloneDX defines `group` as a single name rather than a
+> location. The rest of the design — `softagram:elementPath`, the derived serial, the vcs
+> ancestor walk — is unchanged. See "Caveats" in `docs/data-formats.md`. This file is kept as
+> the record of the original decision.
+
 ---
 
 ## 1. The problem
