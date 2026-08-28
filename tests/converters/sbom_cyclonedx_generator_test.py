@@ -1639,13 +1639,13 @@ def test_metadata_component_carries_element_path():
     assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA'
 
 
-def test_metadata_component_carries_the_parent_path_as_group():
-    """group holds the parent's full path, so two same-named groups stay distinguishable."""
+def test_metadata_component_carries_the_parent_name_as_group():
+    """group holds the parent's bare name, which is what CycloneDX asks the field to hold."""
     model, _ = get_model_and_model_api(MULTI_MODEL)
     result = generate_multi_from_sgraph(model, level=3)
 
-    assert sbom_of(result, 'repoA')['metadata']['component']['group'] == '/OrgName/GroupA'
-    assert sbom_of(result, 'repoB')['metadata']['component']['group'] == '/OrgName/GroupA'
+    assert sbom_of(result, 'repoA')['metadata']['component']['group'] == 'GroupA'
+    assert sbom_of(result, 'repoB')['metadata']['component']['group'] == 'GroupA'
 
 
 def test_element_path_matches_the_serial_number_for_every_sbom():
@@ -1669,7 +1669,7 @@ def test_element_location_is_level_agnostic():
     result = generate_multi_from_sgraph(model, level=2)
 
     component = sbom_of(result, 'GroupA')['metadata']['component']
-    assert component['group'] == '/OrgName'
+    assert component['group'] == 'OrgName'
     assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA'
 
 
@@ -1692,7 +1692,7 @@ def test_selected_element_sbom_also_carries_its_location():
     sbom = generate_for_element_from_sgraph(model, '/OrgName/GroupA/repoA/src')
 
     component = sbom['metadata']['component']
-    assert component['group'] == '/OrgName/GroupA/repoA'
+    assert component['group'] == 'repoA'
     assert find_property(component, 'softagram:elementPath') == '/OrgName/GroupA/repoA/src'
 
 
@@ -1713,11 +1713,11 @@ def test_mirrored_repositories_are_distinguished_by_their_location():
     assert [c['name'] for c in components] == ['shared', 'shared']
 
     by_group = {c['group']: c for c in components}
-    assert sorted(by_group) == ['/OrgName/GroupA', '/OrgName/GroupB']
+    assert sorted(by_group) == ['GroupA', 'GroupB']
 
-    assert find_property(by_group['/OrgName/GroupA'], 'softagram:elementPath') \
+    assert find_property(by_group['GroupA'], 'softagram:elementPath') \
         == '/OrgName/GroupA/shared'
-    assert find_property(by_group['/OrgName/GroupB'], 'softagram:elementPath') \
+    assert find_property(by_group['GroupB'], 'softagram:elementPath') \
         == '/OrgName/GroupB/shared'
 
     # The collision suffix keeps bom-refs unique within the set, but does not identify either one
@@ -1764,9 +1764,9 @@ def test_mirrored_repositories_carry_their_own_distinct_repository_urls():
 
     by_group = {sbom['metadata']['component']['group']: sbom['metadata']['component']
                 for sbom in result}
-    assert [r['url'] for r in by_group['/OrgName/GroupA']['externalReferences']
+    assert [r['url'] for r in by_group['GroupA']['externalReferences']
             if r['type'] == 'vcs'] == ['https://example.org/org/groupa-shared.git']
-    assert [r['url'] for r in by_group['/OrgName/GroupB']['externalReferences']
+    assert [r['url'] for r in by_group['GroupB']['externalReferences']
             if r['type'] == 'vcs'] == ['https://example.org/org/groupb-shared.git']
 
 
@@ -1780,7 +1780,7 @@ def test_nearest_repo_url_wins_over_a_more_distant_ancestor():
     result = generate_multi_from_sgraph(model, level=3)
 
     component = next(s['metadata']['component'] for s in result
-                     if s['metadata']['component']['group'] == '/OrgName/GroupA')
+                     if s['metadata']['component']['group'] == 'GroupA')
     vcs = [r['url'] for r in component['externalReferences'] if r['type'] == 'vcs']
     assert vcs == ['https://example.org/org/groupa-shared.git']
 
@@ -1807,7 +1807,7 @@ def test_transitive_internal_components_carry_their_location():
     result = generate_multi_from_sgraph(model, level=3, transitive=True)
 
     repo_b = next(c for c in sbom_of(result, 'repoA')['components'] if c['name'] == 'repoB')
-    assert repo_b['group'] == '/OrgName/GroupA'
+    assert repo_b['group'] == 'GroupA'
     assert find_property(repo_b, 'softagram:elementPath') == '/OrgName/GroupA/repoB'
     # The pre-existing internal marker survives alongside the new property
     assert find_property(repo_b, 'softagram:internal') == 'true'
@@ -1825,12 +1825,12 @@ def test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location():
     model, _ = get_model_and_model_api(MIRRORED_MODEL)
     result = generate_multi_from_sgraph(model, level=3, transitive=True)
 
-    host = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupA')
+    host = next(s for s in result if s['metadata']['component']['group'] == 'GroupA')
     inlined = next(c for c in host['components']
                    if find_property(c, 'softagram:internal') == 'true')
 
     assert inlined['name'] == host['metadata']['component']['name'] == 'shared'
-    assert inlined['group'] == '/OrgName/GroupB'
+    assert inlined['group'] == 'GroupB'
     assert find_property(inlined, 'softagram:elementPath') == '/OrgName/GroupB/shared'
 
     # List comprehensions rather than a {type: url} dict: these pin cardinality too, so a
@@ -1838,7 +1838,7 @@ def test_inlined_mirror_is_told_apart_from_its_host_by_its_published_location():
     vcs = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'vcs']
     assert vcs == ['https://example.org/org/groupb-shared.git']
 
-    mirror = next(s for s in result if s['metadata']['component']['group'] == '/OrgName/GroupB')
+    mirror = next(s for s in result if s['metadata']['component']['group'] == 'GroupB')
     mirror_serial = mirror['serialNumber'].replace('urn:uuid:', '')
     bom_links = [r['url'] for r in inlined['externalReferences'] if r['type'] == 'bom']
     assert bom_links == [f'urn:cdx:{mirror_serial}/1']
@@ -4402,3 +4402,110 @@ def test_cli_rejects_an_unsupported_spec_version(tmp_path):
     assert '--spec-version' in proc.stderr
     for supported in SUPPORTED_SPEC_VERSIONS:
         assert supported in proc.stderr, proc.stderr
+
+
+# --- group is a name, not a path ---
+#
+# 'group' used to carry the parent's full path. Three things were wrong with that, and the
+# first two were already conceded in docs/data-formats.md as caveats rather than repaired:
+#
+#   1. CycloneDX defines group as "a shortened, single name of the company or project that
+#      produced the component" and says "whitespace and special characters should be
+#      avoided". A value like '/Estate/AccessManagement' is neither.
+#   2. The first path segment is the estate root, the least stable part of the path. Because
+#      group is an identity field, renaming an estate rewrote the identity of every component
+#      in every document at once. That is not hypothetical: a reporting estate renamed its
+#      root and saw exactly this across 689 documents.
+#   3. The disambiguation it was said to buy was not measured in any real estate. Across ten
+#      of them every full-path group mapped one-to-one onto its bare name.
+#
+# The full path remains published, in softagram:elementPath, which is the schema-lawful place
+# for it and is what a consumer needing a tree location should read.
+
+
+def test_group_is_a_name_not_a_path():
+    """A path in group contradicts what CycloneDX says the field is for."""
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+
+    documents = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    groups = [d['metadata']['component']['group'] for d in documents
+              if d['metadata']['component'].get('group')]
+    assert groups, 'fixture produced no group values to check'
+    for group in groups:
+        assert '/' not in group, (
+            f'group {group!r} is a path; CycloneDX asks for a single name with special '
+            f'characters avoided, and the full path is published as softagram:elementPath')
+
+
+def test_component_group_is_a_name_not_a_path():
+    """The same holds for components inside a document, not only its metadata."""
+    model, _ = get_model_and_model_api(MIRRORED_MODEL)
+
+    documents = generate_multi_from_sgraph(model, level=3, transitive=True)
+
+    for document in documents:
+        for component in document.get('components', []):
+            if component.get('group'):
+                assert '/' not in component['group'], component['group']
+
+
+def _estate(root_name):
+    """Two groups under one estate root, each holding a repository."""
+    model = SGraph(SElement(None, ''))
+    for group_name in ('TeamA', 'TeamB'):
+        element = model.createOrGetElementFromPath(f'/{root_name}/{group_name}/service')
+        element.attrs['type'] = 'repository'
+    return model
+
+
+def test_group_is_unchanged_by_an_estate_root_rename():
+    """Renaming the estate must not rewrite the identity of every component in it.
+
+    group is an identity field for consumers such as Dependency-Track. Carrying the estate
+    root inside it meant an organisational rename -- the least stable segment of the path --
+    silently re-identified everything below it.
+    """
+    before = generate_multi_from_sgraph(_estate('TalenomSoftware'), level=3, transitive=True)
+    after = generate_multi_from_sgraph(_estate('SaaS'), level=3, transitive=True)
+
+    groups_before = sorted(d['metadata']['component'].get('group', '') for d in before)
+    groups_after = sorted(d['metadata']['component'].get('group', '') for d in after)
+
+    assert groups_before == groups_after, (
+        f'an estate rename changed every group value: {groups_before} -> {groups_after}')
+
+
+def test_the_estate_root_is_still_recoverable_after_the_change():
+    """Dropping the path from group must not lose it -- elementPath still carries it."""
+    documents = generate_multi_from_sgraph(_estate('SaaS'), level=3, transitive=True)
+
+    paths = [find_property(d['metadata']['component'], 'softagram:elementPath')
+             for d in documents]
+    assert all(p and p.startswith('/SaaS/') for p in paths), paths
+
+
+def test_groups_sharing_a_name_under_different_roots_stay_distinguishable():
+    """The cost of the change, made explicit and shown to be covered.
+
+    A bare name is all that separates two same-named groups under different roots, so their
+    group values now collide where the full path kept them apart. That collision is accepted
+    deliberately: identity does not rest on group. elementPath and the document serial both
+    still separate them, and neither was affected by this change.
+    """
+    model = SGraph(SElement(None, ''))
+    for root in ('RootX', 'RootY'):
+        element = model.createOrGetElementFromPath(f'/{root}/Shared/service')
+        element.attrs['type'] = 'repository'
+
+    documents = generate_multi_from_sgraph(model, level=3, transitive=True)
+    components = [d['metadata']['component'] for d in documents]
+
+    groups = {c.get('group') for c in components}
+    assert groups == {'Shared'}, f'expected the collision this change accepts, got {groups}'
+
+    paths = {find_property(c, 'softagram:elementPath') for c in components}
+    assert paths == {'/RootX/Shared/service', '/RootY/Shared/service'}, paths
+
+    serials = {d['serialNumber'] for d in documents}
+    assert len(serials) == len(documents), 'document serials must still be distinct'
