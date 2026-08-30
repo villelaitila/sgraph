@@ -584,40 +584,50 @@ def bom_ref(elem, v):
     return purl_for(elem, v)[0]
 
 
-# TODO License mapping not implemented
-license_mapping_to_spdx_id = {}
-
-
-def resolve_license_spdx_id(license):
-    acceptable_licenses = {'MIT'}
-    if license in acceptable_licenses:
-        return license
-    else:
-        if license in license_mapping_to_spdx_id:
-            return license_mapping_to_spdx_id[license]
-        return 'UNKNOWN LICENSE'  # TODO What is the proper value for this?
+# The SPDX identifiers this converter is prepared to put in license.id, each with its canonical
+# url. Deliberately a short list of values someone has actually checked rather than a mapping
+# guessed from license strings: CycloneDX $refs the SPDX identifier list from license.id, so a
+# value that is not on that list does not degrade one field, it makes the WHOLE document fail
+# validation and a validating consumer rejects the entire BOM. Widening this table is evidence
+# work — one identifier at a time, verified against the SPDX list — and until an entry exists the
+# name path below reports the licence accurately anyway.
+SPDX_LICENSE_URLS = {
+    'MIT': 'https://spdx.org/licenses/MIT.html',
+}
 
 
 def bom_licenses(elem):
+    """The CycloneDX licences for elem, or none when the model does not state one.
+
+    Two slots, and which one a value goes to is the whole of this function. `id` is constrained
+    to the SPDX identifier enum, so only a checked identifier may go there. `name` is free text
+    and is the slot the specification designates for a licence that cannot be expressed as an
+    identifier — which is where every other value belongs, INCLUDING ones that look like valid
+    SPDX identifiers but are not in the table above. Publishing an unchecked string as an `id`
+    is the failure this function exists to avoid; publishing it as a `name` is merely less
+    precise, and the real value survives either way.
+
+    That matters more than it looks. The previous behaviour replaced any non-MIT licence with
+    the literal string 'UNKNOWN LICENSE' in the `id` field, which is not an SPDX identifier — so
+    a single ordinarily-licensed package would invalidate its whole document, at every spec
+    version this converter can declare, and the licence the model actually knew was discarded on
+    the way. The failure surfaced downstream as a rejected upload rather than as a licence
+    problem, which is the hardest kind to trace back.
+
+    A url is emitted only alongside an identifier we hold one for. The previous placeholders
+    ('UNKNOWN', 'TODO', '') are not IRIs, and an invented url is worse than an absent one because
+    a consumer cannot tell it from a real one — the same reason _add_vcs_reference omits a
+    missing repo_url rather than emitting a blank.
+
+    An attribute that is present but empty states nothing, so it emits nothing: a licences entry
+    built from it would be a fact this converter invented.
     """
-    TODO License handling is still work-in-progress.
-    :param elem:
-    :return:
-    """
-    license_url = {
-        'MIT': 'https://spdx.org/licenses/MIT.html',
-        'GPL': 'TODO',
-        'SPDX_OTHER_TODO': ''
-    }
-    if 'license' in elem.attrs:
-        license_spdx_id = resolve_license_spdx_id(elem.attrs['license'])
-        return [{
-            'license': {
-                'id': license_spdx_id,
-                'url': license_url.get(license_spdx_id, 'UNKNOWN')
-            }
-        }]
-    return []
+    model_license = elem.attrs.get('license', '').strip()
+    if not model_license:
+        return []
+    if model_license in SPDX_LICENSE_URLS:
+        return [{'license': {'id': model_license, 'url': SPDX_LICENSE_URLS[model_license]}}]
+    return [{'license': {'name': model_license}}]
 
 
 def file_extension(e):
